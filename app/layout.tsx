@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next"
 import "./globals.css"
+import InstallPrompt from "@/components/install-prompt"
 
 export const metadata: Metadata = {
   title: "Jayanth's Workout Tracker",
@@ -35,7 +36,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="bg-background">
-      <body>{children}</body>
+      <body>
+        {children}
+        <InstallPrompt />
+      </body>
     </html>
   )
 }
