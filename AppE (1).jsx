@@ -45,6 +45,61 @@ const SESSIONS = [
   { id:"sprint", label:"Sprint Day", sub:"3× per month · replaces that week's Legs", icon:"💨", color:C.sprint, loc:"MPT Ground",    note:"Full 2–3 min rest between every sprint — non-negotiable. Stop the session if speed visibly drops. Skip that week's Legs entirely." },
 ];
 
+// Mobility no longer has one fixed accent color — every component that
+// renders it (StartPicker, MobilityView, Heatmap) computes a theme-aware
+// literal locally (white on dark / black on light) via the themeMode prop,
+// since white alone is invisible against the light theme's background.
+const MOBILITY = [
+  { id:"after_push_before_sprint", after:"Push", before:"Sprint Focus",
+    focus:"Shoulder recovery from push day, light lower-body activation for sprint",
+    items:[
+      "Cross-body shoulder stretch — 30s each arm",
+      "Doorway chest stretch — 30s",
+      "Cat-cow (spine mobility) — 8-10 reps",
+      "Leg swings (front-back, side-side) — 10 each leg",
+      "Walking lunges, bodyweight only — 8 each leg",
+      "Light 5-minute walk or easy jog",
+    ]},
+  { id:"after_sprint_before_pull", after:"Sprint", before:"Pull Focus",
+    focus:"Lower-leg recovery from sprint, light upper-body prep for pull",
+    items:[
+      "Standing calf stretch — 30s each leg",
+      "Hamstring stretch (seated or standing) — 30s each leg",
+      "Foam roll quads and calves — 1-2 min each",
+      "Band pull-aparts — 15-20 reps, light",
+      "Cat-cow — 8-10 reps",
+    ]},
+  { id:"after_pull_before_leg", after:"Pull", before:"Leg (your highest-priority mobility day)",
+    focus:"Knee, ankle, and hip prep — this is the rest day that matters most given your knee situation",
+    items:[
+      "Ankle dorsiflexion stretch (knee-to-wall) — 10 reps each ankle, hold 2-3s",
+      "Hip flexor stretch (half-kneeling) — 30s each side",
+      "Foam roll quads and IT band — 1-2 min each",
+      "Glute bridges, bodyweight — 12-15 reps",
+      "Terminal knee extension, light band — 10-12 reps each leg",
+      "Bodyweight squats, partial range, slow and controlled — 10 reps, used as a check-in for how the knee feels before tomorrow's loaded session",
+    ]},
+  { id:"after_push_before_pull", after:"Push", before:"Pull",
+    focus:"Shoulder recovery from push day, no lower-body demand coming next, so this can stay light and upper-body focused",
+    items:[
+      "Cross-body shoulder stretch — 30s each arm",
+      "Doorway chest stretch — 30s",
+      "Cat-cow (spine mobility) — 8-10 reps",
+      "Band pull-aparts — 15-20 reps, light, primes the back/shoulders for pull day",
+      "Child's pose with reach — 30s, gentle lat stretch",
+    ]},
+  { id:"after_leg_before_sprint", after:"Leg", before:"Sprint",
+    focus:"This is now your most critical mobility day — knee recovery from leg day directly feeding into sprint's deceleration demands, with only one rest day between two knee-intensive sessions",
+    items:[
+      "Foam roll quads, IT band, and calves — 1-2 min each, prioritize recovery from leg day's loading",
+      "Ankle dorsiflexion stretch (knee-to-wall) — 10 reps each ankle, hold 2-3s",
+      "Hip flexor stretch (half-kneeling) — 30s each side",
+      "Glute bridges, bodyweight — 12-15 reps",
+      "Light leg swings (front-back, side-side) — 10 each leg, check how the knee feels moving",
+      "Bodyweight squats, partial range, slow — 10 reps, used specifically as a readiness check before tomorrow's sprint",
+    ]},
+];
+
 const EXERCISES = {
   push:[
     { id:"incline_db_press",  name:"30° Incline DB Press",     icon:"📐",weighted:true,  sets:3,   reps:"8–12",   tempo:"3-1-1-0", focus:"Low incline only · lower 3s, 1s stretch, press" },
@@ -141,6 +196,7 @@ const COOLDOWNS = {
 
 const makeKey  = (d,s,e) => `${d}__${s}__${e}`;
 const doneKey  = (d,s)   => `done__${d}__${s}`;
+const doneMobilityKey = (d,p) => `doneMobility__${d}__${p}`;
 const todayStr = ()      => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const fmtDate  = s       => { if(!s)return""; const [y,m,d]=s.split("-"); const mn=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return `${parseInt(d,10)} ${mn[parseInt(m,10)-1]} ${y}`; };
 const getWeekLabel  = ds => { const d=new Date(ds); const j=new Date(d.getFullYear(),0,4); return `W${String(Math.ceil(((d-j)/86400000+j.getDay()+1)/7)).padStart(2,"0")}`; };
@@ -213,6 +269,22 @@ function getAllTrainingDates(log) {
     });
   });
   return map;
+}
+
+// Set of dates with a completed mobility (rest-day) session — kept on a
+// separate "doneMobility__" key prefix so these never surface in Recent,
+// Progression, or All Sessions, which only look at "done__" keys.
+function getMobilityDates(log) {
+  const dates = new Set();
+  Object.keys(log ?? {}).forEach(k => {
+    if (!k.startsWith("doneMobility__")) return;
+    const rest = k.slice(14);
+    const sep  = rest.lastIndexOf("__");
+    if (sep < 0) return;
+    const date = rest.slice(0, sep);
+    if (isValidDate(date) && log[k]) dates.add(date);
+  });
+  return dates;
 }
 
 function getCompletionStats(log, sessId, date, exList) {
@@ -317,11 +389,13 @@ function lsLoad() {
     const customExercises = (p&&typeof p.customExercises==="object"&&!Array.isArray(p.customExercises)) ? p.customExercises : {};
     const rawWarmups = (p&&typeof p.customWarmups==="object"&&!Array.isArray(p.customWarmups)) ? p.customWarmups : {};
     const rawCooldowns = (p&&typeof p.customCooldowns==="object"&&!Array.isArray(p.customCooldowns)) ? p.customCooldowns : {};
+    const rawMobility = (p&&typeof p.customMobility==="object"&&!Array.isArray(p.customMobility)) ? p.customMobility : {};
     // Strip empty arrays so defaults always show when nothing meaningful saved
     const customWarmups = Object.fromEntries(Object.entries(rawWarmups).filter(([,v])=>Array.isArray(v)&&v.length>0));
     const customCooldowns = Object.fromEntries(Object.entries(rawCooldowns).filter(([,v])=>Array.isArray(v)&&v.length>0));
-    return { log, customExercises, customWarmups, customCooldowns };
-  } catch(_){ return {log:{},customExercises:{},customWarmups:{},customCooldowns:{}}; }
+    const customMobility = Object.fromEntries(Object.entries(rawMobility).filter(([,v])=>Array.isArray(v)&&v.length>0));
+    return { log, customExercises, customWarmups, customCooldowns, customMobility };
+  } catch(_){ return {log:{},customExercises:{},customWarmups:{},customCooldowns:{},customMobility:{}}; }
 }
 function lsSave(d) { try { localStorage.setItem(SK,JSON.stringify(d)); } catch(_){} }
 
@@ -338,7 +412,7 @@ function Card({children,style,glow}){
       position:"relative",overflow:"hidden",...style}}>
       {glow&&<div style={{position:"absolute",top:0,left:0,right:0,height:2,
         background:`linear-gradient(90deg,transparent,${g}aa,transparent)`,
-        backgroundSize:"200% 100%",animation:"_inShimmer 2.2s linear infinite",opacity:.85}}/>}
+        backgroundSize:"200% 100%",animation:"_inShimmer 2.2s linear 1",opacity:.85}}/>}
       {children}
     </div>
   );
@@ -362,12 +436,12 @@ function Button({children,onClick,variant="primary",color,style}){
       {isPrimary&&<div style={{position:"absolute",top:0,left:0,right:0,height:1.5,
         background:`linear-gradient(90deg,transparent,${c}88,transparent)`,
         backgroundSize:"200% 100%",
-        animation:"_inShimmer 1.8s linear infinite"}}/>}
+        animation:"_inShimmer 1.8s linear 1"}}/>}
       {/* shimmer sweep */}
       {isPrimary&&<div style={{position:"absolute",inset:0,
         background:"linear-gradient(105deg,transparent 30%,rgba(255,255,255,.12) 50%,transparent 70%)",
         backgroundSize:"300% 100%",
-        animation:"_inShimmer 2.5s linear infinite",pointerEvents:"none"}}/>}
+        animation:"_inShimmer 2.5s linear 1",pointerEvents:"none"}}/>}
       {children}
     </button>
   );
@@ -382,13 +456,13 @@ function StatCard({label,value,color}){
       <div style={{position:"absolute",top:0,left:0,right:0,height:2,
         background:`linear-gradient(90deg,transparent,${c},transparent)`,
         backgroundSize:"200% 100%",
-        animation:"_inShimmer 2.4s linear infinite",opacity:.75}}/>
+        animation:"_inShimmer 2.4s linear 1",opacity:.75}}/>
       {/* subtle radial glow behind value */}
       <div style={{position:"absolute",inset:0,background:`radial-gradient(ellipse at 50% 30%,${c}0e 0%,transparent 70%)`,
-        animation:"_inGlowPulse 3s ease-in-out infinite",pointerEvents:"none"}}/>
+        animation:"_inGlowPulse 3s ease-in-out 2",pointerEvents:"none"}}/>
       <div style={{fontSize:26,color:c,fontWeight:700,lineHeight:1,marginBottom:5,
         textShadow:`0 0 16px ${c}, 0 0 32px ${c}44`,position:"relative",
-        animation:"_inBeat 3.5s ease-in-out infinite"}}>{value}</div>
+        animation:"_inBeat 3.5s ease-in-out 2"}}>{value}</div>
       <div style={{fontSize:8,color:C.textLow,letterSpacing:1,fontFamily:"monospace",textTransform:"uppercase",position:"relative"}}>{label}</div>
     </div>
   );
@@ -399,12 +473,12 @@ function SectionHeader({children,color}){
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:SP.sm,animation:"_inSlideUp .35s ease both"}}>
       <div style={{width:3,height:14,borderRadius:2,background:col,
         boxShadow:`0 0 8px ${col}99`,flexShrink:0,
-        animation:"_inGlowPulse 2.8s ease-in-out infinite"}}/>
+        animation:"_inGlowPulse 2.8s ease-in-out 2"}}/>
       <div style={{fontSize:9,color:col,letterSpacing:3,textTransform:"uppercase",fontFamily:"monospace",
         textShadow:`0 0 8px ${col}66`}}>{children}</div>
       {/* animated trailing line */}
       <div style={{flex:1,height:1,background:`linear-gradient(90deg,${col}55,transparent)`,
-        animation:"_inShimmer 3s linear infinite",backgroundSize:"300% 100%"}}/>
+        animation:"_inShimmer 3s linear 1",backgroundSize:"300% 100%"}}/>
     </div>
   );
 }
@@ -412,11 +486,11 @@ function Divider(){
   return(
     <div style={{margin:`${SP.md}px 0`,display:"flex",alignItems:"center",gap:6}}>
       <div style={{flex:1,height:1,background:`linear-gradient(90deg,transparent,${C.border}88,transparent)`,
-        backgroundSize:"200% 100%",animation:"_inShimmer 3.5s linear infinite"}}/>
+        backgroundSize:"200% 100%",animation:"_inShimmer 3.5s linear 1"}}/>
       <div style={{width:4,height:4,borderRadius:"50%",background:C.border,opacity:.6,
-        animation:"_inBeat 3s ease-in-out infinite"}}/>
+        animation:"_inBeat 3s ease-in-out 2"}}/>
       <div style={{flex:1,height:1,background:`linear-gradient(90deg,transparent,${C.border}88,transparent)`,
-        backgroundSize:"200% 100%",animation:"_inShimmer 3.5s linear .5s infinite"}}/>
+        backgroundSize:"200% 100%",animation:"_inShimmer 3.5s linear .5s 1"}}/>
     </div>
   );
 }
@@ -434,7 +508,7 @@ function Expand({label,accent,children,defaultOpen}){
         {/* shimmer sweep on open */}
         {open&&<div style={{position:"absolute",inset:0,
           background:"linear-gradient(105deg,transparent 20%,rgba(255,255,255,.06) 50%,transparent 80%)",
-          backgroundSize:"300% 100%",animation:"_inShimmer 2s linear infinite",pointerEvents:"none"}}/>}
+          backgroundSize:"300% 100%",animation:"_inShimmer 2s linear 1",pointerEvents:"none"}}/>}
         <span style={{textShadow:open?`0 0 10px ${col}88`:"none",position:"relative"}}>{label}</span>
         <span style={{fontSize:11,opacity:.75,transition:"transform .22s",display:"inline-block",
           transform:open?"rotate(180deg)":"rotate(0deg)",willChange:"transform",position:"relative"}}>▾</span>
@@ -447,333 +521,99 @@ function Expand({label,accent,children,defaultOpen}){
 function SplashScreen({onDone}){
   const [s,setS]=useState(0);
   const [pgPct,setPgPct]=useState(0);
-  const [nameIdx,setNameIdx]=useState(0);
-  const [ekgX,setEkgX]=useState(0);
-  const NAME="JAYANTH";
 
   useEffect(()=>{
     const t=[
-      setTimeout(()=>setS(1),150),
-      setTimeout(()=>setS(2),800),
-      setTimeout(()=>setS(3),1400),
-      setTimeout(()=>setS(4),2100),
-      setTimeout(()=>setS(5),3000),
-      setTimeout(()=>setS(6),3800),
-      setTimeout(()=>setS(7),5400),
-      setTimeout(()=>onDone(),5900),
+      setTimeout(()=>setS(1),60),
+      setTimeout(()=>setS(2),2900),
+      setTimeout(()=>onDone(),3300),
     ];
     return()=>t.forEach(clearTimeout);
   },[]);
 
   useEffect(()=>{
-    if(s<2) return;
-    const target=s>=6?100:s>=5?82:s>=4?60:s>=3?38:s>=2?18:0;
-    const id=setInterval(()=>setPgPct(p=>p>=target?p:Math.min(target,p+1)),14);
+    const id=setInterval(()=>setPgPct(p=>p>=100?100:p+2.4),65);
     return()=>clearInterval(id);
-  },[s]);
+  },[]);
 
-  useEffect(()=>{
-    if(s<6) return;
-    const id=setInterval(()=>setNameIdx(n=>n>=NAME.length?n:n+1),90);
-    return()=>clearInterval(id);
-  },[s]);
-
-  useEffect(()=>{
-    if(s<4) return;
-    const id=setInterval(()=>setEkgX(x=>(x+2)%320),18);
-    return()=>clearInterval(id);
-  },[s]);
-
-  // Starfield: pure CSS, zero JS cost on mobile
-  const STATIC_STARS=Array.from({length:40},(_,i)=>({
-    l:((i*37+7)%96)+2, t:((i*53+11)%88)+4,
-    s:.8+(i%4)*.5, op:.1+(i%5)*.08,
-    dur:2.5+(i%5)*.6, del:(i%8)*.3,
-    red:i%4===0,
-  }));
-
-  const PARTS=Array.from({length:14},(_,i)=>({
-    l:((i*37+7)%96)+2,d:((i*13)%16)/10,
-    dur:2.4+((i*7)%10)/5,sz:2+(i%3),red:i%3!==1,
-  }));
-
-  const HEX=26;
-  const hexPts=(cx,cy,r)=>Array.from({length:6},(_,i)=>{const a=Math.PI/180*(60*i-30);return`${cx+r*Math.cos(a)},${cy+r*Math.sin(a)}`;}).join(" ");
-  const hexGrid=[];
-  for(let row=0;row<16;row++) for(let col=0;col<9;col++) hexGrid.push({x:col*HEX*1.75+(row%2)*HEX*.87,y:row*HEX*1.5-30,i:row*9+col});
-
-  const DATA_LINES=[
-    {t:"NEURAL CORE......",ok:true},{t:"STRENGTH ENGINE..",ok:true},
-    {t:"PROFILE SYNC.....",ok:true},{t:"JAYANTH_SHIELD...",ok:true},
-    {t:"TRANSFORM 365....",ok:true},
-  ];
+  // 30 dots + twinkle stars + corner brackets — still only transform+opacity
+  // (GPU-composited), no filters/blur, no animated shadows. Pushed further
+  // than the previous pass; if this stutters, the dot/star counts below are
+  // the first things to cut back.
+  const dots=useMemo(()=>Array.from({length:30},(_,i)=>({
+    x:6+((i*23)%88), y:6+((i*37)%88),
+    dur:1.8+(i%5)*.3, delay:(i%7)*.22,
+  })),[]);
+  const stars=useMemo(()=>Array.from({length:14},(_,i)=>({
+    x:12+((i*53)%76), y:12+((i*31)%76),
+    dur:1.2+(i%4)*.25, delay:(i%6)*.3,
+  })),[]);
 
   return(
-    <div style={{position:"fixed",inset:0,background:"#000",zIndex:2000,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",overflow:"hidden",fontFamily:"monospace",opacity:s>=7?0:1,transition:s>=7?"opacity 0.55s ease":"none"}}>
+    <div style={{position:"fixed",inset:0,background:"#000",zIndex:2000,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",overflow:"hidden",fontFamily:"monospace",opacity:s>=2?0:1,transition:s>=2?"opacity .35s ease":"none"}}>
       <style>{`
-        @keyframes _rIn   {from{stroke-dashoffset:2000;opacity:0}to{stroke-dashoffset:0;opacity:1}}
-        @keyframes _rPls  {0%,100%{opacity:.1;transform:scale(1)}50%{opacity:.55;transform:scale(1.03)}}
-        @keyframes _burst {0%{opacity:0;transform:scale(.15) rotate(-20deg);filter:brightness(8) blur(4px)}45%{opacity:1;transform:scale(1.15) rotate(4deg);filter:brightness(2.5)}100%{opacity:1;transform:scale(1) rotate(0deg);filter:brightness(1)}}
-        @keyframes _glow  {0%,100%{opacity:.35;transform:scale(1)}50%{opacity:1;transform:scale(1.12)}}
-        @keyframes _up    {0%{transform:translateY(0) scale(.3);opacity:0}8%{opacity:1}82%{opacity:.5}100%{transform:translateY(-300px) scale(1.4);opacity:0}}
-        @keyframes _tagIn {from{opacity:0;letter-spacing:14px;filter:blur(10px)}to{opacity:1;letter-spacing:4px;filter:blur(0)}}
-        @keyframes _subIn {from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
-        @keyframes _scan  {from{transform:translateY(-100%)}to{transform:translateY(100vh)}}
-        @keyframes _arc   {0%,82%,100%{opacity:0}86%{opacity:1}91%{opacity:.15}94%{opacity:.9}}
-        @keyframes _oF1   {from{transform:rotate(0deg) translateX(168px) rotate(0deg)}to{transform:rotate(360deg) translateX(168px) rotate(-360deg)}}
-        @keyframes _oF2   {from{transform:rotate(0deg) translateX(125px) rotate(0deg)}to{transform:rotate(360deg) translateX(125px) rotate(-360deg)}}
-        @keyframes _oR1   {from{transform:rotate(0deg) translateX(145px) rotate(0deg)}to{transform:rotate(-360deg) translateX(145px) rotate(360deg)}}
-        @keyframes _oR2   {from{transform:rotate(0deg) translateX(105px) rotate(0deg)}to{transform:rotate(-360deg) translateX(105px) rotate(360deg)}}
-        @keyframes _oF3   {from{transform:rotate(0deg) translateX(86px) rotate(0deg)}to{transform:rotate(360deg) translateX(86px) rotate(-360deg)}}
-        @keyframes _cln   {0%,100%{opacity:0;stroke-dashoffset:340}32%,68%{opacity:1;stroke-dashoffset:0}}
-        @keyframes _cg    {0%,100%{opacity:.2}50%{opacity:.7}}
-        @keyframes _shim  {from{background-position:-600px 0}to{background-position:600px 0}}
-        @keyframes _gltch {0%,88%,100%{transform:translate(0) skew(0)}90%{transform:translate(-5px,2px) skew(-1.5deg)}92%{transform:translate(5px,-3px) skew(1deg)}94%{transform:translate(-3px,3px)}96%{transform:translate(4px,-2px)}}
-        @keyframes _hexW  {0%,100%{opacity:.03}50%{opacity:.13}}
-        @keyframes _dType {from{opacity:0;max-width:0}to{opacity:1;max-width:240px}}
-        @keyframes _blnk  {0%,100%{opacity:1}50%{opacity:0}}
-        @keyframes _radar {from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-        @keyframes _eRing {0%{r:70;opacity:.9;stroke-width:3}100%{r:220;opacity:0;stroke-width:.3}}
-        @keyframes _shock {0%{r:40;opacity:1}100%{r:250;opacity:0}}
-        @keyframes _flkr  {0%,100%{opacity:1}47%{opacity:1}50%{opacity:.2}53%{opacity:1}76%{opacity:1}79%{opacity:.4}82%{opacity:1}}
-        @keyframes _rotCW {from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-        @keyframes _rotCCW{from{transform:rotate(0deg)}to{transform:rotate(-360deg)}}
-        @keyframes _nameL {from{opacity:0;transform:translateY(-22px) scale(1.9);filter:blur(7px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
-        @keyframes _hudfade{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
-        @keyframes _hudR  {from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
-        @keyframes _chromR{0%,100%{transform:translate(0,0)}50%{transform:translate(2px,0)}}
-        @keyframes _chromB{0%,100%{transform:translate(0,0)}50%{transform:translate(-2px,0)}}
+        @keyframes _spFade   {from{opacity:0;transform:scale(.92)}to{opacity:1;transform:scale(1)}}
+        @keyframes _spPulse  {0%,100%{opacity:.25;transform:scale(1)}50%{opacity:.6;transform:scale(1.08)}}
+        @keyframes _spDot    {0%,100%{opacity:.15;transform:scale(.7)}50%{opacity:.7;transform:scale(1)}}
+        @keyframes _spStar   {0%,100%{opacity:.1;transform:scale(.6)}50%{opacity:.9;transform:scale(1.15)}}
+        @keyframes _spScan   {0%{transform:translateY(-130px);opacity:0}10%{opacity:.5}90%{opacity:.5}100%{transform:translateY(130px);opacity:0}}
+        @keyframes _spCorner {from{opacity:0;transform:scale(.8)}to{opacity:1;transform:scale(1)}}
+        @keyframes _spText   {0%,100%{opacity:.5}50%{opacity:1}}
       `}</style>
 
-      {STATIC_STARS.map((st,i)=>(
-        <div key={i} style={{position:"absolute",left:`${st.l}%`,top:`${st.t}%`,width:st.s,height:st.s,borderRadius:"50%",background:st.red?"#e21c1a":"#fff",opacity:st.op,animation:`_rPls ${st.dur}s ease-in-out ${st.del}s infinite`,zIndex:0,pointerEvents:"none"}}/>
+      {/* faint drifting dots — transform+opacity only, no shadows/filters */}
+      {dots.map((d,i)=>(
+        <div key={i} style={{position:"absolute",left:`${d.x}%`,top:`${d.y}%`,width:3,height:3,borderRadius:"50%",
+          background:"#e21c1a",opacity:.3,
+          animation:`_spDot ${d.dur}s ease-in-out ${d.delay}s infinite`,willChange:"transform,opacity"}}/>
       ))}
 
-      <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none",zIndex:1}} viewBox="0 0 400 820" preserveAspectRatio="xMidYMid slice">
-        {hexGrid.map(({x,y,i})=>(
-          <polygon key={i} points={hexPts(x,y,HEX*.88)} fill={i%9===0?"#e21c1a09":i%6===0?"#1a000009":"none"} stroke={i%4===0?"#e21c1a2a":i%2===0?"#ffffff0e":"#ffffff06"} strokeWidth=".4" style={{animation:`_hexW ${2.8+(i*41%28)/10}s ease-in-out ${(i*17%22)/10}s infinite`}}/>
-        ))}
-      </svg>
-
-      <div style={{position:"absolute",inset:0,backgroundImage:"repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(255,20,60,.008) 3px,rgba(255,20,60,.008) 4px)",pointerEvents:"none",zIndex:2}}/>
-      <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse at 50% 50%,transparent 50%,#00000088 100%)",pointerEvents:"none",zIndex:2}}/>
-      {s>=3&&<div style={{position:"absolute",top:0,left:0,right:0,height:"90%",background:"linear-gradient(180deg,rgba(226,28,26,.022) 0%,transparent 100%)",animation:"_scan 3.5s linear infinite",pointerEvents:"none",zIndex:2}}/>}
-
-{/* chromatic aberration removed for perf */}
-
-      {s>=1&&[{x:"0%",y:"0%",c:"#e21c1a",sz:240},{x:"100%",y:"0%",c:"#ff8800",sz:160},{x:"50%",y:"105%",c:"#e21c1a",sz:300},{x:"100%",y:"100%",c:"#ff3300",sz:200},{x:"0%",y:"55%",c:"#ffffff",sz:120},{x:"100%",y:"45%",c:"#ffffff",sz:100}].map((g,i)=>(
-        <div key={i} style={{position:"absolute",left:g.x,top:g.y,width:g.sz,height:g.sz,borderRadius:"50%",background:`radial-gradient(circle,${g.c}${s>=3?"22":"0c"} 0%,transparent 70%)`,transform:"translate(-50%,-50%)",animation:`_cg ${2.4+i*.35}s ease-in-out ${i*.22}s infinite`,pointerEvents:"none",zIndex:3}}/>
+      {/* tiny twinkling stars — separate timing/size from the dots above for visual variety */}
+      {stars.map((d,i)=>(
+        <div key={`st${i}`} style={{position:"absolute",left:`${d.x}%`,top:`${d.y}%`,width:1.5,height:1.5,borderRadius:"50%",
+          background:"#ffffff",opacity:.4,
+          animation:`_spStar ${d.dur}s ease-in-out ${d.delay}s infinite`,willChange:"transform,opacity"}}/>
       ))}
 
-      <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none",zIndex:4}} viewBox="0 0 400 820" preserveAspectRatio="xMidYMid slice">
-        <defs>
-          <filter id="fr" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-          <filter id="fw" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-          <filter id="fg" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="10" result="b"/><feColorMatrix in="b" values="3 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 5 0" result="r"/><feMerge><feMergeNode in="r"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-          <filter id="fgw"><feGaussianBlur stdDeviation="7" result="b"/><feColorMatrix in="b" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 4 0" result="r"/><feMerge><feMergeNode in="r"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-          <filter id="fek"><feGaussianBlur stdDeviation="2"/></filter>
-          <radialGradient id="rgR" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#e21c1a" stopOpacity=".6"/><stop offset="100%" stopColor="#e21c1a" stopOpacity="0"/></radialGradient>
-          <radialGradient id="rgO" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#ff6600" stopOpacity=".3"/><stop offset="100%" stopColor="#ff6600" stopOpacity="0"/></radialGradient>
-          <linearGradient id="lgBolt" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stopColor="#e21c1a"/><stop offset="60%" stopColor="#ff6600"/><stop offset="100%" stopColor="#ffaa00"/></linearGradient>
-          <linearGradient id="lgEkg" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stopColor="#e21c1a" stopOpacity="0"/><stop offset="30%" stopColor="#e21c1a"/><stop offset="70%" stopColor="#ff6600"/><stop offset="100%" stopColor="#e21c1a" stopOpacity="0"/></linearGradient>
-          <clipPath id="cpC"><circle cx="200" cy="410" r="200"/></clipPath>
-          <clipPath id="cpEkg"><rect x="60" y="390" width="280" height="40"/></clipPath>
-        </defs>
+      {/* pulsing glow ring */}
+      <div style={{position:"absolute",width:230,height:230,borderRadius:"50%",
+        background:"radial-gradient(circle,#e21c1a22 0%,transparent 65%)",
+        animation:"_spPulse 2.6s ease-in-out infinite",willChange:"transform,opacity"}}/>
 
-        {s>=2&&<>
-          <circle cx="200" cy="410" r="200" fill="url(#rgR)" opacity=".7" style={{animation:"_glow 2.8s ease-in-out infinite"}}/>
-          <circle cx="200" cy="410" r="120" fill="url(#rgO)" opacity=".5" style={{animation:"_glow 2s ease-in-out .7s infinite"}}/>
-        </>}
+      {/* vertical scan sweep through the logo zone — translateY+opacity, composited */}
+      <div style={{position:"absolute",width:170,height:2,background:"linear-gradient(90deg,transparent,#e21c1a55,transparent)",
+        animation:"_spScan 2.4s ease-in-out infinite",willChange:"transform,opacity"}}/>
 
-        {s>=2&&[0,1,2,3].map(i=>(
-          <circle key={i} cx="200" cy="410" r="40" fill="none" stroke={i%2===0?"#e21c1a":"#ff6600"} strokeWidth={3-i*.5} filter="url(#fr)" opacity="0" style={{animation:`_shock ${1.4+i*.35}s ease-out ${i*.2}s forwards`}}/>
-        ))}
-
-        {s>=1&&[195,170,148,126,104,84,66].map((r2,i)=>(
-          <circle key={r2} cx="200" cy="410" r={r2} fill="none"
-            stroke={[0,2,4,6].includes(i)?"#e21c1a":i===1?"#ff6600":"#ffffff"}
-            strokeWidth={i===0?2.8:i===1?2:i===2?1.4:i===3?1:.6}
-            strokeDasharray={i===0?`${r2*3} 8`:i===2?`4 ${r2/2}`:i===4?`2 6`:r2*6}
-            filter={[0,2].includes(i)?"url(#fr)":"url(#fw)"}
-            style={{animation:`_rIn ${.65+i*.07}s ease-out ${i*.09}s forwards, _rPls ${2.4+i*.3}s ease-in-out ${.7+i*.08}s infinite`,opacity:0}}/>
-        ))}
-
-        {s>=2&&<g style={{transformOrigin:"200px 410px",animation:"_rotCW 8s linear infinite",willChange:"transform"}}>
-          <circle cx="200" cy="410" r="205" fill="none" stroke="#e21c1a" strokeWidth="1.2" strokeDasharray="12 18" filter="url(#fr)" opacity=".5"/>
-        </g>}
-
-        {s>=3&&<g style={{transformOrigin:"200px 410px",animation:"_rotCCW 12s linear infinite",willChange:"transform"}}>
-          <circle cx="200" cy="410" r="214" fill="none" stroke="#ff6600" strokeWidth=".8" strokeDasharray="6 30" filter="url(#fr)" opacity=".4"/>
-          {[0,90,180,270].map(deg=>{const rd=Math.PI*deg/180;return <line key={deg} x1={200+198*Math.cos(rd)} y1={410+198*Math.sin(rd)} x2={200+222*Math.cos(rd)} y2={410+222*Math.sin(rd)} stroke="#ff6600" strokeWidth="2" filter="url(#fr)" opacity=".8"/>;  })}
-        </g>}
-
-        {s>=3&&<g style={{transformOrigin:"200px 410px",animation:"_rotCW 3s linear infinite",willChange:"transform"}}>
-          <circle cx="200" cy="410" r="62" fill="none" stroke="#e21c1a" strokeWidth="1" strokeDasharray="8 14" filter="url(#fr)" opacity=".6"/>
-        </g>}
-
-        {s>=3&&<g style={{transformOrigin:"200px 410px",animation:"_radar 2.8s linear infinite",willChange:"transform"}}>
-          <path d={`M200,410 L200,218 A192,192 0 0,1 ${200+192*Math.sin(Math.PI/4)},${410-192*Math.cos(Math.PI/4)} Z`} fill="url(#lgBolt)" opacity=".07" clipPath="url(#cpC)"/>
-          <line x1="200" y1="410" x2="200" y2="218" stroke="#e21c1a" strokeWidth="2.5" filter="url(#fr)" opacity=".8"/>
-          <circle cx="200" cy="230" r="3" fill="#ff6600" filter="url(#fr)" style={{animation:"_glow 1s ease-in-out infinite"}}/>
-        </g>}
-
-        {s>=2&&[0,45,90,135,180,225,270,315].map((deg,i)=>{
-          const rd=Math.PI*deg/180;
-          const isCard=deg%90===0;
-          return <line key={deg} x1={200+340*Math.cos(rd)} y1={410+340*Math.sin(rd)} x2={200+90*Math.cos(rd)} y2={410+90*Math.sin(rd)} stroke={isCard?"#e21c1a":"#ffffff"} strokeWidth={isCard?2:.6} filter={isCard?"url(#fr)":"url(#fw)"} style={{strokeDasharray:280,animation:`_cln ${1.9+(i*7%8)/10}s ease-in-out ${i*.15}s infinite`,opacity:0}}/>;
-        })}
-
-        {s>=2&&Array.from({length:24},(_,i)=>{
-          const deg=i*15,rd=Math.PI*deg/180;
-          const isMaj=deg%90===0,isMed=deg%30===0;
-          const r1=isMaj?165:isMed?170:175,r2=187;
-          return <g key={deg}>
-            <line x1={200+r1*Math.cos(rd)} y1={410+r1*Math.sin(rd)} x2={200+r2*Math.cos(rd)} y2={410+r2*Math.sin(rd)} stroke={isMaj?"#e21c1a":isMed?"#ff6600":"#ffffff"} strokeWidth={isMaj?3:isMed?1.8:.7} filter={isMaj?"url(#fr)":"url(#fw)"} opacity={s>=2?.95:.3} style={{transition:"opacity .4s"}}/>
-            {isMaj&&<text x={200+(r2+14)*Math.cos(rd)} y={410+(r2+14)*Math.sin(rd)+3} textAnchor="middle" fontSize="8" fill="#e21c1a77" fontFamily="monospace" style={{animation:"_flkr 5s ease-in-out infinite"}}>{["000","090","180","270"][i/6]}</text>}
-          </g>;
-        })}
-
-        {s>=3&&[[200,215,"N"],[388,414,"E"],[200,608,"S"],[12,414,"W"]].map(([x,y,l])=>(
-          <text key={l} x={x} y={y} textAnchor="middle" fontSize="10" fill="#e21c1a99" fontFamily="monospace" fontWeight="bold" style={{animation:"_flkr 7s ease-in-out infinite"}}>{l}</text>
-        ))}
-
-        {s>=3&&Array.from({length:16},(_,i)=>{
-          const deg=i*22.5,rd=Math.PI*deg/180,isMaj=deg%90===0;
-          return <line key={deg} x1={200+78*Math.cos(rd)} y1={410+78*Math.sin(rd)} x2={200+(isMaj?155:135)*Math.cos(rd)} y2={410+(isMaj?155:135)*Math.sin(rd)} stroke={isMaj?"#e21c1a":"#ff6600"} strokeWidth={isMaj?2.5:1} filter={isMaj?"url(#fr)":"url(#fw)"} style={{strokeDasharray:80,animation:`_rPls ${1.1+i*.13}s ease-in-out ${i*.1}s infinite`}}/>;
-        })}
-
-        {s>=3&&[0,1,2,3,4].map(i=>(
-          <circle key={i} cx="200" cy="410" r="70" fill="none" stroke={i%3===0?"#e21c1a":i%3===1?"#ff6600":"#ffffff"} strokeWidth="1.8" filter={i%2===0?"url(#fr)":"url(#fw)"} opacity="0" style={{animation:`_eRing ${2.2+i*.5}s ease-out ${i*.44}s infinite`}}/>
-        ))}
-
-        {s>=1&&<>
-          <polyline points="0,0 58,82 36,82 112,178 86,178 162,325 200,410" fill="none" stroke="url(#lgBolt)" strokeWidth="3" filter="url(#fg)" style={{strokeDasharray:800,strokeDashoffset:s>=2?0:800,transition:"stroke-dashoffset .8s ease .04s"}}/>
-          <polyline points="0,14 44,96 26,96 96,198 200,410" fill="none" stroke="#e21c1a" strokeWidth="1" filter="url(#fr)" opacity=".4" style={{strokeDasharray:540,strokeDashoffset:s>=2?0:540,transition:"stroke-dashoffset 1.1s ease .18s"}}/>
-          <polyline points="16,0 66,70 46,70 124,158 104,158 172,305 200,410" fill="none" stroke="#ff6600" strokeWidth=".7" filter="url(#fr)" opacity=".28" style={{strokeDasharray:620,strokeDashoffset:s>=2?0:620,transition:"stroke-dashoffset 1.25s ease .32s"}}/>
-          <circle cx="5" cy="5" r="7" fill="#e21c1a" filter="url(#fg)" opacity={s>=2?1:0} style={{transition:"opacity .3s"}}/>
-          <circle cx="20" cy="3" r="3.5" fill="#ff6600" filter="url(#fr)" opacity={s>=2?.8:0} style={{transition:"opacity .4s"}}/>
-          <path d="M0,0 Q55,0 55,55" stroke="url(#lgBolt)" strokeWidth="2.5" fill="none" opacity={s>=2?.9:0} style={{transition:"opacity .4s"}}/>
-        </>}
-        {s>=1&&<>
-          <polyline points="400,0 342,82 364,82 288,178 314,178 238,325 200,410" fill="none" stroke="#ffffff" strokeWidth="3" filter="url(#fgw)" style={{strokeDasharray:800,strokeDashoffset:s>=2?0:800,transition:"stroke-dashoffset .8s ease .14s"}}/>
-          <polyline points="386,0 328,90 350,90 268,192 200,410" fill="none" stroke="#ffffff" strokeWidth="1" filter="url(#fw)" opacity=".32" style={{strokeDasharray:550,strokeDashoffset:s>=2?0:550,transition:"stroke-dashoffset 1.1s ease .28s"}}/>
-          <circle cx="395" cy="5" r="7" fill="#ffffff" filter="url(#fgw)" opacity={s>=2?.95:0} style={{transition:"opacity .3s"}}/>
-          <path d="M400,0 Q345,0 345,55" stroke="#ffffff" strokeWidth="2.5" fill="none" opacity={s>=2?.8:0} style={{transition:"opacity .4s"}}/>
-        </>}
-        {s>=1&&<>
-          <polyline points="0,820 58,738 36,738 112,642 86,642 162,495 200,410" fill="none" stroke="#ffffff" strokeWidth="3" filter="url(#fgw)" style={{strokeDasharray:800,strokeDashoffset:s>=2?0:800,transition:"stroke-dashoffset .8s ease .28s"}}/>
-          <polyline points="14,820 60,742 38,742 108,646 200,410" fill="none" stroke="#ffffff" strokeWidth="1" filter="url(#fw)" opacity=".3" style={{strokeDasharray:540,strokeDashoffset:s>=2?0:540,transition:"stroke-dashoffset 1.1s ease .42s"}}/>
-          <circle cx="5" cy="815" r="7" fill="#ffffff" filter="url(#fgw)" opacity={s>=2?.85:0} style={{transition:"opacity .3s"}}/>
-          <path d="M0,820 Q55,820 55,765" stroke="#ffffff" strokeWidth="2.5" fill="none" opacity={s>=2?.7:0} style={{transition:"opacity .4s"}}/>
-        </>}
-        {s>=1&&<>
-          <polyline points="400,820 342,738 364,738 288,642 314,642 238,495 200,410" fill="none" stroke="url(#lgBolt)" strokeWidth="3" filter="url(#fg)" style={{strokeDasharray:800,strokeDashoffset:s>=2?0:800,transition:"stroke-dashoffset .8s ease .08s"}}/>
-          <polyline points="386,820 330,742 354,742 268,646 200,410" fill="none" stroke="#e21c1a" strokeWidth="1" filter="url(#fr)" opacity=".32" style={{strokeDasharray:540,strokeDashoffset:s>=2?0:540,transition:"stroke-dashoffset 1.1s ease .22s"}}/>
-          <circle cx="395" cy="815" r="7" fill="#e21c1a" filter="url(#fg)" opacity={s>=2?1:0} style={{transition:"opacity .3s"}}/>
-          <path d="M400,820 Q345,820 345,765" stroke="url(#lgBolt)" strokeWidth="2.5" fill="none" opacity={s>=2?.9:0} style={{transition:"opacity .4s"}}/>
-        </>}
-
-        {s>=1&&[[[0,0],[45,0],[0,45]],[[400,0],[355,0],[400,45]],[[0,820],[0,775],[45,820]],[[400,820],[355,820],[400,775]]].map((pts,ci)=>(
-          <polyline key={ci} points={pts.map(p=>p.join(",")).join(" ")} fill="none" stroke={ci%2===0?"#e21c1a":"#ffffff"} strokeWidth="3" filter={ci%2===0?"url(#fr)":"url(#fw)"} opacity={s>=1?.95:.3} style={{transition:"opacity .5s"}}/>
-        ))}
-
-{/* arc flashes removed for perf */}
-
-        {/* DNA removed for perf */}
-
-{/* meter bars removed for perf */}
-
-        {s>=4&&<g clipPath="url(#cpEkg)">
-          <path d={`M${60+ekgX-80<60?60:60+ekgX-80},410 Q${60+ekgX-60},410 ${60+ekgX-55},398 L${60+ekgX-50},428 L${60+ekgX-44},388 L${60+ekgX-38},422 L${60+ekgX-32},410 L${60+ekgX},410`} fill="none" stroke="url(#lgEkg)" strokeWidth="2" filter="url(#fek)" opacity={ekgX>70?.9:.3}/>
-          <circle cx={60+ekgX} cy={410} r="3" fill="#e21c1a" filter="url(#fr)" style={{animation:"_glow .8s ease-in-out infinite"}}/>
-        </g>}
-
-        {s>=4&&<>
-          <text x="200" y="38" textAnchor="middle" fontSize="8" fill="#e21c1a66" fontFamily="monospace" letterSpacing="3">◆ STRENGTH SYSTEM ONLINE ◆</text>
-          <line x1="60" y1="44" x2="340" y2="44" stroke="#e21c1a" strokeWidth=".5" opacity=".3"/>
-          {["PWR","SPD","STR","END"].map((l,i)=>(
-            <g key={l}>
-              <text x={90+i*60} y={56} textAnchor="middle" fontSize="7" fill="#e21c1a88" fontFamily="monospace">{l}</text>
-              <rect x={78+i*60} y={60} width={24} height={4} rx="1" fill="#111"/>
-              <rect x={78+i*60} y={60} width={[18,22,20,16][i]} height={4} rx="1" fill="#e21c1a" opacity=".8" style={{animation:`_rPls ${1.5+i*.2}s ease-in-out ${i*.3}s infinite`}}/>
-            </g>
-          ))}
-          <line x1="60" y1="776" x2="340" y2="776" stroke="#e21c1a" strokeWidth=".5" opacity=".3"/>
-          <text x="200" y="788" textAnchor="middle" fontSize="7" fill="#e21c1a55" fontFamily="monospace" letterSpacing="2">TRANSFORM · 365 · PROTOCOL</text>
-        </>}
-      </svg>
-
-      {PARTS.map((p,i)=>(
-        <div key={i} style={{position:"absolute",bottom:"32%",left:`${p.l}%`,width:p.sz,height:p.sz,borderRadius:"50%",background:p.red?"#e21c1a":"#ffffff",boxShadow:p.red?`0 0 ${p.sz*6}px ${p.sz*3}px #e21c1a55`:`0 0 ${p.sz*5}px ${p.sz}px #ffffff44`,animation:s>=1?`_up ${p.dur}s ease-in ${p.d}s infinite`:"none",opacity:0,zIndex:5,willChange:"transform,opacity"}}/>
+      {/* corner brackets framing the lockup — static position, single fade-in each, no per-frame cost after mount */}
+      {[["8%","8%",0,0],["92%","8%",1,0],["8%","92%",0,1],["92%","92%",1,1]].map(([l,t,fx,fy],i)=>(
+        <div key={i} style={{position:"absolute",left:l,top:t,width:16,height:16,
+          borderTop:fy?"none":"1.5px solid #e21c1a55",borderBottom:fy?"1.5px solid #e21c1a55":"none",
+          borderLeft:fx?"none":"1.5px solid #e21c1a55",borderRight:fx?"1.5px solid #e21c1a55":"none",
+          transform:`translate(${fx?-100:0}%,${fy?-100:0}%)`,
+          opacity:s>=1?1:0,animation:s===1?`_spCorner .5s ease ${.1+i*.06}s both`:"none"}}/>
       ))}
 
-      {s>=3&&<>
-        <div style={{position:"absolute",width:380,height:380,borderRadius:"50%",background:"radial-gradient(circle,#e21c1a14 0%,transparent 60%)",animation:"_glow 2.5s ease-in-out infinite",zIndex:5,willChange:"transform"}}/>
-        <div style={{position:"absolute",width:180,height:180,borderRadius:"50%",background:"radial-gradient(circle,#ff440018 0%,transparent 65%)",animation:"_glow 1.9s ease-in-out .5s infinite",zIndex:5,willChange:"transform"}}/>
-      </>}
-
-      {s>=3&&<div style={{position:"absolute",zIndex:7,width:1,height:1}}>
-        {[
-          {sz:9, c:"#e21c1a",sh:"#e21c1a",a:"_oF1 2.2s linear infinite"},
-          {sz:6, c:"#ffffff",sh:"#ffffff", a:"_oF2 2.8s linear .5s infinite"},
-          {sz:7, c:"#ff6600",sh:"#ff6600",a:"_oR1 1.9s linear infinite"},
-          {sz:4, c:"#eeeeee",sh:"#eeeeee",a:"_oR2 2.4s linear .3s infinite"},
-        ].map((o,i)=>(
-          <div key={i} style={{position:"absolute",width:o.sz,height:o.sz,borderRadius:"50%",top:-o.sz/2,left:-o.sz/2,background:o.c,boxShadow:`0 0 ${o.sz*2}px ${o.sh}, 0 0 ${o.sz*5}px ${o.sh}44`,transformOrigin:"0 0",animation:o.a,willChange:"transform"}}/>
-        ))}
-      </div>}
-
-
-
-      {s>=6&&<div style={{position:"absolute",top:"11%",zIndex:10,display:"flex",gap:4}}>
-        {NAME.split("").map((ch,i)=>(
-          <div key={i} style={{fontSize:24,fontWeight:900,color:"#e21c1a",fontFamily:"monospace",letterSpacing:2,textShadow:"0 0 20px #e21c1a, 0 0 55px #e21c1a66, 0 0 110px #e21c1a22",opacity:nameIdx>i?1:0,animation:nameIdx>i?"_nameL .35s cubic-bezier(.2,1.5,.4,1) both":"none"}}>{ch}</div>
-        ))}
-      </div>}
-
-      <div style={{position:"relative",zIndex:8,opacity:s>=2?1:0,animation:s===2?"_burst .85s cubic-bezier(.2,1.8,.35,1) forwards":s>=3?"_gltch 6s ease-in-out 2s infinite":"none",filter:s>=3?"drop-shadow(0 0 28px #e41414) drop-shadow(0 0 56px #ff440066) drop-shadow(0 0 80px #e2000022)":"none",transition:"filter .6s ease"}}>
-        <img src={ICON_DATA_URI} width={188} height={188} alt="J Shield" style={{display:"block",objectFit:"contain"}}/>
-        {s>=4&&<div style={{position:"absolute",inset:0,background:"linear-gradient(128deg,transparent 25%,rgba(255,255,255,.18) 48%,transparent 68%)",backgroundSize:"200% 200%",animation:"_shim 1.8s linear infinite",borderRadius:10,pointerEvents:"none"}}/>}
+      <div style={{position:"relative",opacity:s>=1?1:0,animation:s===1?"_spFade .45s ease both":"none"}}>
+        <img src={ICON_DATA_URI} width={148} height={148} alt="J Shield" style={{display:"block",objectFit:"contain"}}/>
       </div>
 
-      {s>=4&&<div style={{position:"absolute",bottom:148,left:18,fontFamily:"monospace",fontSize:8.5,color:"#e21c1a",letterSpacing:.8,lineHeight:2,zIndex:9,textShadow:"0 0 8px #e21c1a",opacity:s>=4?1:0,transition:"opacity .4s"}}>
-        {DATA_LINES.map((line,i)=>(
-          <div key={i} style={{overflow:"hidden",whiteSpace:"nowrap",animation:`_dType .45s steps(${line.t.length+3},end) ${i*.32}s both`,maxWidth:0,color:i===DATA_LINES.length-1?"#00ff88":undefined,textShadow:i===DATA_LINES.length-1?"0 0 10px #00ff88":undefined}}>
-            {line.t}<span style={{color:"#00ff88",textShadow:"0 0 8px #00ff88"}}>OK</span>
-          </div>
-        ))}
-        <div style={{display:"inline-block",width:7,height:11,background:"#e21c1a",animation:"_blnk .65s step-end infinite",marginTop:2}}/>
-      </div>}
+      <div style={{marginTop:16,fontSize:12,letterSpacing:3,color:"#e21c1ad0",textTransform:"uppercase",fontWeight:700,
+        opacity:s>=1?1:0,animation:s===1?"_spFade .5s ease .15s both":"none"}}>Journey to Strength</div>
 
-      <div style={{position:"relative",zIndex:10,marginTop:24,textAlign:"center",opacity:s>=5?1:0,transition:"opacity .35s"}}>
-        <div style={{fontSize:15,letterSpacing:4,color:"#ffffff",textTransform:"uppercase",fontWeight:700,animation:s>=5?"_tagIn 1.1s cubic-bezier(.22,1,.36,1) forwards":"none",textShadow:"0 0 35px #e21c1a, 0 0 80px #e21c1a44, 0 0 150px #e21c1a18"}}>
-          Journey to Strength
-        </div>
-        <div style={{fontSize:9,letterSpacing:5,color:"#e21c1a99",textTransform:"uppercase",marginTop:7,animation:s>=5?"_subIn .9s ease .5s both":"none",opacity:0}}>
-          Jayanth · Transform 365
-        </div>
-      </div>
-
-      <div style={{position:"absolute",bottom:68,left:"10%",right:"10%",zIndex:10,opacity:s>=2?1:0,transition:"opacity .5s"}}>
+      <div style={{position:"absolute",bottom:64,left:"14%",right:"14%"}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-          <span style={{fontSize:7.5,color:"#e21c1a77",letterSpacing:2,fontFamily:"monospace"}}>◀ INITIALISING SHIELD ▶</span>
-          <span style={{fontSize:8,color:"#e21c1acc",fontFamily:"monospace",fontWeight:700,textShadow:"0 0 8px #e21c1a"}}>{pgPct}%</span>
+          <span style={{fontSize:7.5,color:"#e21c1a99",letterSpacing:2,fontFamily:"monospace",animation:"_spText 1.4s ease-in-out infinite"}}>LOADING</span>
+          <span style={{fontSize:8,color:"#e21c1acc",fontFamily:"monospace",fontWeight:700}}>{pgPct}%</span>
         </div>
-        <div style={{height:4,background:"#0d0000",borderRadius:3,overflow:"hidden",border:"1px solid #e21c1a22",position:"relative"}}>
-          <div style={{height:"100%",borderRadius:3,background:"linear-gradient(90deg,#500,#e21c1a,#ff7040,#ffaa00,#ff7040,#e21c1a,#500)",backgroundSize:"400% 100%",width:`${pgPct}%`,transition:"width .25s ease",boxShadow:"0 0 16px #e21c1a, 0 0 32px #e21c1a55",animation:"_shim .9s linear infinite"}}/>
-        </div>
-        <div style={{height:1.5,background:"#0d0000",borderRadius:2,marginTop:3,overflow:"hidden"}}>
-          <div style={{height:"100%",background:"linear-gradient(90deg,transparent,#ff660066,transparent)",width:`${pgPct}%`,transition:"width .25s ease"}}/>
-        </div>
-        <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
-          {[0,20,40,60,80,100].map(v=>(
-            <div key={v} style={{fontSize:6.5,color:pgPct>=v?"#e21c1aaa":"#2a0000",fontFamily:"monospace",transition:"color .3s"}}>{v}</div>
-          ))}
+        <div style={{height:4,background:"#0d0000",borderRadius:3,overflow:"hidden",border:"1px solid #e21c1a22"}}>
+          <div style={{height:"100%",borderRadius:3,background:"#e21c1a",
+            width:`${pgPct}%`,transition:"width .15s linear"}}/>
         </div>
       </div>
     </div>
   );
 }
+
 
 function JShieldSVG({size=44,glow=false}){
   // Traced from reference icon image:
@@ -1012,7 +852,7 @@ function RecoveryBar({label,icon,color,days}){
         {/* shimmer sweep across fill */}
         {pct>0&&<div style={{position:"absolute",top:0,left:0,height:"100%",width:`${pct}%`,
           background:"linear-gradient(90deg,transparent 20%,rgba(255,255,255,.22) 50%,transparent 80%)",
-          backgroundSize:"200% 100%",animation:"_inShimmer 1.8s linear infinite",pointerEvents:"none"}}/>}
+          backgroundSize:"200% 100%",animation:"_inShimmer 1.8s linear 1",pointerEvents:"none"}}/>}
       </div>
       <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
         {[0,25,50,75,100].map(v=>(
@@ -1023,9 +863,12 @@ function RecoveryBar({label,icon,color,days}){
   );
 }
 
-function Heatmap({log}){
+function Heatmap({log,themeMode}){
   const scrollRef = useRef(null);
   const today = new Date(todayStr()+"T00:00:00");
+  // Literal hex (not a CSS var) so it can be alpha-suffixed below —
+  // white reads against the dark theme, black reads against the light theme.
+  const MOBILITY_COLOR = themeMode==="light" ? "#000000" : "#ffffff";
 
   // Start at the beginning of the current month by default — if there's logged
   // history from before that, extend back to cover it instead of showing a year
@@ -1041,10 +884,11 @@ function Heatmap({log}){
   start.setDate(start.getDate()-start.getDay()); // snap back to Sunday
 
   const trainMap = getAllTrainingDates(log);
+  const mobilitySet = getMobilityDates(log);
   const dayCells = [];
   for(let d=new Date(start); d<=today; d.setDate(d.getDate()+1)){
     const ds = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    dayCells.push({ date:ds, dow:d.getDay(), month:d.getMonth(), sessIds:trainMap[ds]??[] });
+    dayCells.push({ date:ds, dow:d.getDay(), month:d.getMonth(), sessIds:trainMap[ds]??[], mobility:mobilitySet.has(ds) });
   }
 
   const cols=[]; let col=[];
@@ -1086,14 +930,15 @@ function Heatmap({log}){
                   const cell = colArr.find(d=>d.dow===ri);
                   if(!cell) return <div key={ri} style={{width:11,height:11}}/>;
                   const col2 = colorFor(cell.sessIds);
+                  const cellColor = col2 ?? (cell.mobility ? MOBILITY_COLOR : null);
                   const isToday = cell.date===todayStr();
-                  return <div key={ri} title={`${cell.date}${cell.sessIds.length?` · ${cell.sessIds.join(", ")}`:""}`}
+                  return <div key={ri} title={`${cell.date}${cell.sessIds.length?` · ${cell.sessIds.join(", ")}`:""}${cell.mobility?` · Mobility`:""}`}
                     style={{width:11,height:11,borderRadius:2,
-                      background: col2 ? col2+"d0" : C.surfaceHi,
-                      border: isToday ? `1.5px solid ${C.gold}` : `1px solid ${C.border}`,
-                      boxShadow: isToday ? `0 0 6px ${C.gold}88` : col2 ? `0 0 4px ${col2}66` : "none",
+                      background: cellColor ? cellColor+"d0" : C.surfaceHi,
+                      border: isToday ? `1.5px solid ${C.gold}` : cell.mobility&&col2 ? `1px solid ${MOBILITY_COLOR}` : `1px solid ${C.border}`,
+                      boxShadow: isToday ? `0 0 6px ${C.gold}88` : cellColor ? `0 0 4px ${cellColor}66` : "none",
                       boxSizing:"border-box",
-                      animation: isToday ? "_inBeat 2.5s ease-in-out infinite" : (col2?"_appFadeIn .3s ease both":"none")}}/>;
+                      animation: isToday ? "_inBeat 2.5s ease-in-out 2" : (cellColor?"_appFadeIn .3s ease both":"none")}}/>;
                 })}
               </div>
             ))}
@@ -1107,6 +952,10 @@ function Heatmap({log}){
             <span style={{fontSize:9,color:C.textLow}}>{s.label.split(" ")[0]}</span>
           </div>
         ))}
+        <div style={{display:"flex",alignItems:"center",gap:4}}>
+          <div style={{width:9,height:9,borderRadius:2,background:MOBILITY_COLOR+"d0",border:`1px solid ${MOBILITY_COLOR}`}}/>
+          <span style={{fontSize:9,color:C.textLow}}>Mobility</span>
+        </div>
       </div>
     </div>
   );
@@ -1146,7 +995,7 @@ function ExRow({ex,accent,logKey,logVal,onLog,lastWeight}){
       <div style={{position:"absolute",left:0,top:0,bottom:0,width:2.5,
         background:`linear-gradient(180deg,${accent},${accent}55)`,borderRadius:"0 2px 2px 0",
         boxShadow:`2px 0 8px ${accent}44`,
-        animation:"_inGlowPulse 2.5s ease-in-out infinite"}}/>
+        animation:"_inGlowPulse 2.5s ease-in-out 2"}}/>
       {lastWeight&&<div style={{marginBottom:8,fontSize:11,color:C.textMid}}>Last session: <span style={{color:accent,fontWeight:700}}>{lastWeight} kg</span>{done&&logVal>lastWeight&&<span style={{color:C.ok,marginLeft:6,display:"inline-flex",alignItems:"center",gap:3,
   background:C.ok+"18",border:`1px solid ${C.ok}44`,borderRadius:4,padding:"1px 7px",
   boxShadow:`0 0 10px ${C.ok}55`,animation:"_inPrBadge .5s cubic-bezier(.22,1.8,.4,1) both"}}>▲ +{(logVal-lastWeight).toFixed(1)} kg PR</span>}</div>}
@@ -1503,10 +1352,25 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
   const [cdRows,setCdRows] = useState(()=>(cooldownList||[]).map(x=>typeof x==="string"?{text:x}:{text:x.text||""}));
   const [emojiPickerIdx,setEmojiPickerIdx] = useState(null);
 
-  const EMOJI_OPTS = ["🏋","💪","🦵","⬇","↔","🎯","🔨","🤸","🧘","⚡","📐","🔼","🦅","🛡","🍑","🦀","🌉","🧳","💨","🏃","🦘","📦","🔄","↩"];
+  const EMOJI_OPTS = ["🏋","💪","🦵","⬇","↔","🎯","🔨","🤸","🧘","⚡","📐","🔼","🦅","🛡","🍑","🦀","🌉","🧳","💨","🏃","🦘","📦","🔄","↩","🔥","⬆","🤲","✊","🦶","🦾","🏔","🪜","⛓","🧗","🥊","🤾","🦴","🌀","➰","🪢","🎢","🪂","🦿","🧱","⚓","🪝","🔽","↗"];
 
   function patchRow(idx,patch){setRows(rs=>rs.map((r,i)=>i===idx?{...r,...patch}:r));}
   function deleteRow(idx){setRows(rs=>rs.filter((_,i)=>i!==idx));setEmojiPickerIdx(null);}
+  function moveRow(idx,dir){
+    setRows(rs=>{
+      const j=idx+dir; if(j<0||j>=rs.length) return rs;
+      const next=rs.slice(); const [item]=next.splice(idx,1); next.splice(j,0,item);
+      return next;
+    });
+    setEmojiPickerIdx(null);
+  }
+  function moveListItem(setter,idx,dir){
+    setter(rs=>{
+      const j=idx+dir; if(j<0||j>=rs.length) return rs;
+      const next=rs.slice(); const [item]=next.splice(idx,1); next.splice(j,0,item);
+      return next;
+    });
+  }
   function addRow(){
     const existingIds = rows.map(r=>r.id);
     const id = makeExerciseId("New Exercise", existingIds);
@@ -1564,6 +1428,10 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
           {rows.map((r,i)=>(
             <Card key={r.id??i} style={{padding:12,marginBottom:8}}>
               <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"flex-start"}}>
+                <div style={{display:"flex",flexDirection:"column",gap:3,flexShrink:0}}>
+                  <button onClick={()=>moveRow(i,-1)} disabled={i===0} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===0?C.textLow:C.text,fontSize:10,cursor:i===0?"default":"pointer",lineHeight:1,opacity:i===0?.4:1}}>▲</button>
+                  <button onClick={()=>moveRow(i,1)} disabled={i===rows.length-1} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===rows.length-1?C.textLow:C.text,fontSize:10,cursor:i===rows.length-1?"default":"pointer",lineHeight:1,opacity:i===rows.length-1?.4:1}}>▼</button>
+                </div>
                 <div style={{position:"relative"}}>
                   <button onClick={()=>setEmojiPickerIdx(emojiPickerIdx===i?null:i)}
                     style={{width:38,height:38,fontSize:20,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -1604,6 +1472,10 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
           <div style={{fontSize:10,color:C.textLow,marginBottom:SP.md,lineHeight:1.6}}>Edit warm-up steps. Each line is one step shown to you before the session starts.</div>
           {wuRows.map((r,i)=>(
             <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:3,flexShrink:0}}>
+                <button onClick={()=>moveListItem(setWuRows,i,-1)} disabled={i===0} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===0?C.textLow:C.text,fontSize:10,cursor:i===0?"default":"pointer",lineHeight:1,opacity:i===0?.4:1}}>▲</button>
+                <button onClick={()=>moveListItem(setWuRows,i,1)} disabled={i===wuRows.length-1} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===wuRows.length-1?C.textLow:C.text,fontSize:10,cursor:i===wuRows.length-1?"default":"pointer",lineHeight:1,opacity:i===wuRows.length-1?.4:1}}>▼</button>
+              </div>
               <input value={r.text||""} onChange={e=>setWuRows(rs=>rs.map((x,j)=>j===i?{text:e.target.value}:x))}
                 placeholder="e.g. Standing leg swings × 1×15 each leg"
                 style={{...inputStyle,flex:1}}/>
@@ -1618,6 +1490,10 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
           <div style={{fontSize:10,color:C.textLow,marginBottom:SP.md,lineHeight:1.6}}>Edit cool-down steps shown after the session completes.</div>
           {cdRows.map((r,i)=>(
             <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:3,flexShrink:0}}>
+                <button onClick={()=>moveListItem(setCdRows,i,-1)} disabled={i===0} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===0?C.textLow:C.text,fontSize:10,cursor:i===0?"default":"pointer",lineHeight:1,opacity:i===0?.4:1}}>▲</button>
+                <button onClick={()=>moveListItem(setCdRows,i,1)} disabled={i===cdRows.length-1} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===cdRows.length-1?C.textLow:C.text,fontSize:10,cursor:i===cdRows.length-1?"default":"pointer",lineHeight:1,opacity:i===cdRows.length-1?.4:1}}>▼</button>
+              </div>
               <input value={r.text||""} onChange={e=>setCdRows(rs=>rs.map((x,j)=>j===i?{text:e.target.value}:x))}
                 placeholder="e.g. Doorway chest stretch — 2×30s"
                 style={{...inputStyle,flex:1}}/>
@@ -1729,10 +1605,7 @@ function SessionView({sessId,date,log,onLog,onBack,onComplete,exList,warmupList,
   exList = exList ?? [];
   const wu=warmupList??WARMUPS[sessId]??[];
   const cd=cooldownList??COOLDOWNS[sessId]??[];
-  const weighted=exList.filter(e=>e.weighted);
-  const bodyweight=exList.filter(e=>!e.weighted);
   const isComplete=!!log[doneKey(date,sessId)];
-  const wLogged=weighted.filter(e=>(log[makeKey(date,sessId,e.id)]??null)!=null).length;
   const comp=getCompletionStats(log,sessId,date,exList);
   return <div style={{paddingBottom:80}}>
     <div style={{background:`linear-gradient(180deg,${sess.color}14 0%,${sess.color}06 100%)`,borderBottom:`1px solid ${sess.color}35`,padding:"18px 16px 14px",position:"relative"}}>
@@ -1760,7 +1633,7 @@ function SessionView({sessId,date,log,onLog,onBack,onComplete,exList,warmupList,
           <div style={{height:"100%",width:`${comp.pct}%`,background:`linear-gradient(90deg,${sess.color}77,${sess.color})`,borderRadius:4,transition:"width 0.45s cubic-bezier(.22,1,.36,1)",boxShadow:`0 0 10px ${sess.color}99`}}/>
           {comp.pct>5&&<div style={{position:"absolute",top:0,left:0,height:"100%",width:`${comp.pct}%`,
             background:"linear-gradient(90deg,transparent 10%,rgba(255,255,255,.2) 50%,transparent 90%)",
-            backgroundSize:"200% 100%",animation:"_inShimmer 1.5s linear infinite",pointerEvents:"none"}}/>}
+            backgroundSize:"200% 100%",animation:"_inShimmer 1.5s linear 1",pointerEvents:"none"}}/>}
         </div>
         <div style={{display:"flex",gap:3,marginTop:4}}>
           {Array.from({length:comp.total},(_,i)=>(
@@ -1784,8 +1657,8 @@ function SessionView({sessId,date,log,onLog,onBack,onComplete,exList,warmupList,
         )}
       </Expand>
       <Divider/>
-      {weighted.length>0&&<><SectionHeader color={sess.color}>Weighted — Enter kg <span style={{color:C.textLow}}>({wLogged}/{weighted.length})</span></SectionHeader>{weighted.map(ex=><ExRow key={ex.id} ex={ex} accent={sess.color} logKey={makeKey(date,sessId,ex.id)} logVal={log[makeKey(date,sessId,ex.id)]??null} onLog={onLog} lastWeight={getLastWeight(log,sessId,ex.id,date)}/>)}</>}
-      {bodyweight.length>0&&<><Divider/><SectionHeader color={C.textMid}>Bodyweight / Core — Mark Done</SectionHeader>{bodyweight.map(ex=><ExRow key={ex.id} ex={ex} accent={sess.color} logKey={makeKey(date,sessId,ex.id)} logVal={log[makeKey(date,sessId,ex.id)]??null} onLog={onLog}/>)}</>}
+      <SectionHeader color={sess.color}>Exercises <span style={{color:C.textLow}}>({comp.done}/{comp.total})</span></SectionHeader>
+      {exList.map(ex=><ExRow key={ex.id} ex={ex} accent={sess.color} logKey={makeKey(date,sessId,ex.id)} logVal={log[makeKey(date,sessId,ex.id)]??null} onLog={onLog} lastWeight={ex.weighted?getLastWeight(log,sessId,ex.id,date):undefined}/>)}
       <Divider/>
       <Expand label="🟥 Cool Down" accent={sess.color}>
         {cd.map(c=><div key={c} style={{fontSize:11,color:C.textMid,padding:"2px 0 2px 10px"}}>· {c}</div>)}
@@ -1799,11 +1672,13 @@ function SessionView({sessId,date,log,onLog,onBack,onComplete,exList,warmupList,
 
 function HistoryView({log,onOpen,onBack,exercises,onDeleteSession}){
   const [confirmDel,setConfirmDel]=useState(null); // {date,sessId}
-  // Parse done__ keys using lastIndexOf for robustness
-  const completed=Object.keys(log??{}).filter(k=>k.startsWith("done__")).map(k=>{
+  const [visible,setVisible]=useState(50); // render in pages so huge histories (1000+) don't all mount at once
+  // Parse done__ keys using lastIndexOf for robustness — memoized so it only recomputes when the log changes
+  const completed=useMemo(()=>Object.keys(log??{}).filter(k=>k.startsWith("done__")).map(k=>{
     const rest=k.slice(6); const sep=rest.lastIndexOf("__"); if(sep<0)return null;
     return{date:rest.slice(0,sep),sessId:rest.slice(sep+2)};
-  }).filter(r=>r&&isValidDate(r.date)&&r.sessId).sort((a,b)=>b.date.localeCompare(a.date));
+  }).filter(r=>r&&isValidDate(r.date)&&r.sessId).sort((a,b)=>b.date.localeCompare(a.date)),[log]);
+  const shown=completed.slice(0,visible);
 
   return <div style={{paddingBottom:60}}>
     <div style={{padding:"18px 16px 14px",borderBottom:`1px solid ${C.border}`,position:"relative"}}>
@@ -1814,14 +1689,14 @@ function HistoryView({log,onOpen,onBack,exercises,onDeleteSession}){
     </div>
     <div style={{padding:SP.md}}>
       {completed.length===0&&<div style={{textAlign:"center",padding:`${SP.xl}px ${SP.md}px`}}><div style={{fontSize:32,marginBottom:SP.md}}>💪</div><div style={{fontSize:14,color:C.textMid,marginBottom:SP.sm}}>No sessions logged yet</div><div style={{fontSize:12,color:C.textLow,lineHeight:1.8}}>Start your first session<br/>to begin tracking progress.</div></div>}
-      {completed.map(s=>{
+      {shown.map(s=>{
         const m=SESSIONS.find(x=>x.id===s.sessId)??{icon:"?",label:s.sessId,color:C.textMid};
         const comp=getCompletionStats(log,s.sessId,s.date,exercises?.[s.sessId]);
         const key=`${s.date}__${s.sessId}`;
         const isConfirming=confirmDel&&confirmDel.date===s.date&&confirmDel.sessId===s.sessId;
         return <div key={key} style={{background:C.card,border:`1px solid ${isConfirming?C.warn:C.border}`,borderRadius:9,padding:"12px 14px",marginBottom:SP.sm}}>
           <div style={{display:"grid",gridTemplateColumns:"44px 1fr auto",gap:SP.sm,alignItems:"center",cursor:"pointer"}} onClick={()=>!isConfirming&&onOpen(s.sessId,s.date)}>
-            <div style={{width:38,height:38,borderRadius:8,background:m.color+"18",border:`1px solid ${m.color}35`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{m.icon}</div>
+            <IconBox color={m.color} size={20}/>
             <div>
               <div style={{fontSize:13,color:C.text}}>{m.label}</div>
               <div style={{fontSize:10,color:C.textLow,marginTop:2}}>{fmtDate(s.date)} · {comp.done}/{comp.total} exercises · {comp.pct}%</div>
@@ -1841,6 +1716,11 @@ function HistoryView({log,onOpen,onBack,exercises,onDeleteSession}){
           </div>}
         </div>;
       })}
+      {visible<completed.length&&<button onClick={()=>setVisible(v=>v+50)}
+        style={{width:"100%",padding:"11px",marginTop:4,background:C.card,border:`1px solid ${C.border}`,borderRadius:9,
+          color:C.textMid,fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>
+        Load more ({completed.length-visible} remaining)
+      </button>}
     </div>
   </div>;
 }
@@ -1860,7 +1740,7 @@ function ProgressView({log,onBack,exercises}){
       <div style={{fontSize:10,color:C.textLow,marginTop:3}}>Tap exercise · All / Week / Month</div>
     </div>
     <div style={{padding:SP.md}}>
-      <div style={{display:"flex",gap:6,marginBottom:SP.md,flexWrap:"wrap"}}>{["push","pull","legs"].map(s=>{const m=SESSIONS.find(x=>x.id===s)??{icon:"?",label:s,color:C.textMid};return <button key={s} onClick={()=>setSelSess(s)} style={{padding:"7px 14px",background:selSess===s?m.color+"22":C.card,border:`1px solid ${selSess===s?m.color:C.border}`,borderRadius:6,color:selSess===s?m.color:C.textMid,fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif"}}>{m.icon} {m.label.split(" ")[0]}</button>;})}</div>
+      <div style={{display:"flex",gap:6,marginBottom:SP.md,flexWrap:"wrap"}}>{["push","pull","legs"].map(s=>{const m=SESSIONS.find(x=>x.id===s)??{icon:"?",label:s,color:C.textMid};return <button key={s} onClick={()=>setSelSess(s)} style={{padding:"7px 14px",background:selSess===s?m.color+"22":C.card,border:`1px solid ${selSess===s?m.color:C.border}`,borderRadius:6,color:selSess===s?m.color:C.textMid,fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif",display:"flex",alignItems:"center",gap:6}}><IconBox color={m.color} size={20}/> {m.label.split(" ")[0]}</button>;})}</div>
       <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:SP.md}}>{exList.map(ex=><button key={ex.id} onClick={()=>setSelEx(ex.id)} style={{padding:"5px 10px",background:selEx===ex.id?meta.color+"22":C.card,border:`1px solid ${selEx===ex.id?meta.color:C.border}`,borderRadius:5,color:selEx===ex.id?meta.color:C.textMid,fontSize:10,cursor:"pointer",fontFamily:"Georgia,serif",position:"relative"}}>{ex.name.split(" ").slice(0,2).join(" ")}{hasData(ex.id)&&<span style={{position:"absolute",top:2,right:2,width:4,height:4,borderRadius:"50%",background:C.ok}}/>}</button>)}</div>
       {selEx&&<Card style={{padding:SP.md,marginBottom:SP.md}}><Graph exId={selEx} sessId={selSess} exName={exList.find(e=>e.id===selEx)?.name??selEx} accent={meta.color} log={log}/></Card>}
       <Divider/>
@@ -1870,10 +1750,21 @@ function ProgressView({log,onBack,exercises}){
   </div>;
 }
 
-function StartPicker({onStart,onBack}){
+function StartPicker({onStart,onStartMobility,onBack,themeMode}){
   const [sessId,setSessId]=useState("push");
+  const [mobilityPlanId,setMobilityPlanId]=useState(MOBILITY[0].id);
   const [dateVal,setDateVal]=useState(todayStr());
-  const chosen=SESSIONS.find(s=>s.id===sessId)??SESSIONS[0];
+  const isMobility = sessId==="mobility";
+  const chosen=SESSIONS.find(s=>s.id===sessId);
+  // Literal hex (not a CSS var) so it can still be alpha-suffixed (e.g. MOBILITY_TEXT+"18")
+  // the way the other session colors are — white reads on dark, black reads on light.
+  const MOBILITY_TEXT = themeMode==="light" ? "#000000" : "#ffffff";
+  const accent = isMobility ? MOBILITY_TEXT : (chosen?.color ?? C.gold);
+
+  const yesterday=(()=>{const d=new Date(todayStr()+"T00:00:00");d.setDate(d.getDate()-1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;})();
+  const dayBefore=(()=>{const d=new Date(todayStr()+"T00:00:00");d.setDate(d.getDate()-2);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;})();
+  const quickDates=[["Today",todayStr()],["Yesterday",yesterday],[fmtDate(dayBefore).split(" ").slice(0,2).join(" "),dayBefore]];
+
   return <div style={{paddingBottom:60}}>
     <div style={{padding:"18px 16px 14px",borderBottom:`1px solid ${C.border}`}}>
       <button onClick={onBack} style={{background:"none",border:"none",color:C.textMid,fontSize:13,cursor:"pointer",padding:0,marginBottom:SP.sm,fontFamily:"Georgia,serif"}}>← Back</button>
@@ -1882,10 +1773,168 @@ function StartPicker({onStart,onBack}){
     </div>
     <div style={{padding:"18px 16px"}}>
       <SectionHeader>Choose Session</SectionHeader>
-      <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:SP.lg}}>{SESSIONS.map(s=><button key={s.id} onClick={()=>setSessId(s.id)} style={{background:sessId===s.id?s.color+"18":C.card,border:`2px solid ${sessId===s.id?s.color:C.border}`,borderRadius:9,padding:"13px 16px",cursor:"pointer",textAlign:"left",fontFamily:"Georgia,serif",display:"flex",alignItems:"center",gap:12}}><span style={{fontSize:20}}>{s.icon}</span><div style={{flex:1}}><div style={{fontSize:14,color:sessId===s.id?s.color:C.text}}>{s.label}</div><div style={{fontSize:10,color:C.textLow,marginTop:1}}>{s.sub} · 📍 {s.loc}</div></div>{sessId===s.id&&<span style={{color:s.color,fontSize:16}}>✓</span>}</button>)}</div>
+      <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:SP.lg}}>
+        {SESSIONS.map(s=><button key={s.id} onClick={()=>setSessId(s.id)} style={{background:sessId===s.id?s.color+"18":C.card,border:`2px solid ${sessId===s.id?s.color:C.border}`,borderRadius:9,padding:"13px 16px",cursor:"pointer",textAlign:"left",fontFamily:"Georgia,serif",display:"flex",alignItems:"center",gap:12}}><IconBox color={s.color} size={20}/><div style={{flex:1}}><div style={{fontSize:14,color:sessId===s.id?s.color:C.text}}>{s.label}</div><div style={{fontSize:10,color:C.textLow,marginTop:1}}>{s.sub} · 📍 {s.loc}</div></div>{sessId===s.id&&<span style={{color:s.color,fontSize:16}}>✓</span>}</button>)}
+        <button onClick={()=>setSessId("mobility")} style={{background:isMobility?MOBILITY_TEXT+"18":C.card,border:`2px solid ${isMobility?MOBILITY_TEXT:C.border}`,borderRadius:9,padding:"13px 16px",cursor:"pointer",textAlign:"left",fontFamily:"Georgia,serif",display:"flex",alignItems:"center",gap:12}}>
+          <IconBox color={MOBILITY_TEXT} size={20}/>
+          <div style={{flex:1}}><div style={{fontSize:14,color:isMobility?MOBILITY_TEXT:C.text}}>Mobility</div><div style={{fontSize:10,color:C.textLow,marginTop:1}}>Rest day stretch & activation routines</div></div>
+          {isMobility&&<span style={{color:MOBILITY_TEXT,fontSize:16}}>✓</span>}
+        </button>
+      </div>
+
+      {isMobility && <>
+        <SectionHeader color={MOBILITY_TEXT}>Choose Rest Day</SectionHeader>
+        <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:SP.lg}}>
+          {MOBILITY.map(m=>(
+            <button key={m.id} onClick={()=>setMobilityPlanId(m.id)}
+              style={{background:mobilityPlanId===m.id?MOBILITY_TEXT+"18":C.card,border:`2px solid ${mobilityPlanId===m.id?MOBILITY_TEXT:C.border}`,
+                borderRadius:9,padding:"11px 14px",cursor:"pointer",textAlign:"left",fontFamily:"Georgia,serif",
+                display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+              <div style={{fontSize:12,color:mobilityPlanId===m.id?MOBILITY_TEXT:C.text}}>After {m.after}, Before {m.before}</div>
+              {mobilityPlanId===m.id&&<span style={{color:MOBILITY_TEXT,fontSize:14,flexShrink:0}}>✓</span>}
+            </button>
+          ))}
+        </div>
+      </>}
+
       <SectionHeader>Date</SectionHeader>
-      <input type="date" value={dateVal} onChange={e=>setDateVal(e.target.value)} style={{width:"100%",background:C.card,border:`1px solid ${C.borderHi}`,borderRadius:7,color:C.text,fontSize:14,padding:"12px 14px",fontFamily:"Georgia,serif",marginBottom:SP.lg,boxSizing:"border-box",outline:"none",colorScheme:"dark"}}/>
-      <Button onClick={()=>onStart(sessId,dateVal)} color={chosen.color} style={{width:"100%",padding:SP.md,fontSize:15}}>Open {chosen.label} →</Button>
+      <div style={{display:"flex",gap:6,marginBottom:8}}>
+        {quickDates.map(([lbl,val])=>(
+          <button key={lbl} onClick={()=>setDateVal(val)}
+            style={{flex:1,padding:"9px 4px",background:dateVal===val?accent+"18":C.card,
+              border:`1.5px solid ${dateVal===val?accent:C.border}`,borderRadius:8,
+              color:dateVal===val?accent:C.textMid,fontSize:11,cursor:"pointer",
+              fontFamily:"Georgia,serif",fontWeight:dateVal===val?700:400}}>{lbl}</button>
+        ))}
+      </div>
+      <div style={{position:"relative",marginBottom:SP.lg}}>
+        <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",fontSize:14,color:accent,pointerEvents:"none"}}>📅</span>
+        <input type="date" value={dateVal} onChange={e=>setDateVal(e.target.value)} max={todayStr()}
+          style={{width:"100%",background:C.card,border:`1.5px solid ${C.borderHi}`,borderRadius:9,color:C.text,fontSize:14,
+            padding:"12px 14px 12px 38px",fontFamily:"Georgia,serif",boxSizing:"border-box",outline:"none",colorScheme:"dark"}}/>
+      </div>
+      <div style={{fontSize:10,color:C.textLow,marginBottom:SP.lg,textAlign:"center"}}>{fmtDate(dateVal)}</div>
+
+      {isMobility
+        ? <Button onClick={()=>onStartMobility(mobilityPlanId,dateVal)} color={MOBILITY_TEXT} style={{width:"100%",padding:SP.md,fontSize:15}}>Open Mobility →</Button>
+        : <Button onClick={()=>onStart(sessId,dateVal)} color={chosen.color} style={{width:"100%",padding:SP.md,fontSize:15}}>Open {chosen.label} →</Button>}
+    </div>
+  </div>;
+}
+
+function IconBox({color,size=28}){
+  return <div style={{width:size,height:size,borderRadius:8,background:`${color}14`,
+    border:`1.5px solid ${color}`,boxShadow:`0 0 8px ${color}55`,flexShrink:0}}/>;
+}
+
+function MobilityView({log,onLog,customMobility,onSaveMobility,initialDate,initialPlanId,onBack,themeMode}){
+  const [tabId,setTabId]=useState(initialPlanId&&MOBILITY.some(m=>m.id===initialPlanId)?initialPlanId:MOBILITY[0].id);
+  const [date,setDate]=useState(initialDate||todayStr());
+  const [editing,setEditing]=useState(false);
+  const [draft,setDraft]=useState(null);
+  const plan=MOBILITY.find(m=>m.id===tabId)??MOBILITY[0];
+  const items = (customMobility?.[plan.id]?.length ? customMobility[plan.id] : plan.items);
+  // Literal hex (not a CSS var) so it can be alpha-suffixed like ${W}66 below —
+  // white reads against the dark theme, black reads against the light theme.
+  const W=themeMode==="light" ? "#000000" : "#ffffff";
+  const completedToday = !!log?.[doneMobilityKey(date,plan.id)];
+  const isToday = date===todayStr();
+
+  function startEdit(){ setDraft(items.slice()); setEditing(true); }
+  function cancelEdit(){ setEditing(false); setDraft(null); }
+  function saveEdit(){
+    const cleaned=(draft??[]).map(t=>t.trim()).filter(Boolean);
+    onSaveMobility(plan.id, cleaned.length?cleaned:plan.items);
+    setEditing(false); setDraft(null);
+  }
+  function updateDraftItem(i,val){ setDraft(d=>d.map((t,idx)=>idx===i?val:t)); }
+  function removeDraftItem(i){ setDraft(d=>d.filter((_,idx)=>idx!==i)); }
+  function addDraftItem(){ setDraft(d=>[...d,""]); }
+  function moveDraftItem(i,dir){ setDraft(d=>{ const j=i+dir; if(j<0||j>=d.length) return d; const next=d.slice(); const [item]=next.splice(i,1); next.splice(j,0,item); return next; }); }
+
+  function selectTab(id){ setTabId(id); setEditing(false); setDraft(null); }
+  function toggleComplete(){ onLog(doneMobilityKey(date,plan.id), completedToday?null:true); }
+
+  return <div style={{paddingBottom:60}}>
+    <div style={{padding:"18px 16px 14px",borderBottom:`1px solid ${C.border}`}}>
+      <button onClick={onBack} style={{background:"none",border:"none",color:C.textMid,fontSize:13,cursor:"pointer",padding:0,marginBottom:SP.sm,fontFamily:"Georgia,serif"}}>← Back</button>
+      <div style={{fontSize:9,color:W,letterSpacing:3,marginBottom:3,fontFamily:"monospace",textShadow:`0 0 8px ${W}66`}}>REST DAY</div>
+      <div style={{fontSize:22,color:W,textShadow:`0 0 12px ${W}55`,display:"flex",alignItems:"center",gap:10}}>
+        <IconBox color={W} size={20}/> Mobility
+      </div>
+    </div>
+    <div style={{padding:"18px 16px"}}>
+      <SectionHeader color={W}>Date</SectionHeader>
+      <div style={{display:"flex",gap:7,marginBottom:SP.lg}}>
+        {[["Today",todayStr()],["Yesterday",(()=>{const d=new Date(todayStr()+"T00:00:00");d.setDate(d.getDate()-1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;})()]].map(([lbl,val])=>(
+          <button key={lbl} onClick={()=>setDate(val)} style={{flex:1,padding:"9px 0",background:date===val?W+"18":C.card,border:`1.5px solid ${date===val?W:C.border}`,borderRadius:8,color:date===val?W:C.textMid,fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif",fontWeight:date===val?700:400}}>{lbl}</button>
+        ))}
+        <input type="date" value={date} onChange={e=>setDate(e.target.value)} max={todayStr()}
+          style={{flex:1,background:C.card,border:`1.5px solid ${C.borderHi}`,borderRadius:8,color:C.text,fontSize:12,padding:"9px 8px",fontFamily:"Georgia,serif",outline:"none",colorScheme:"dark",textAlign:"center"}}/>
+      </div>
+      <SectionHeader color={W}>Choose Rest Day</SectionHeader>
+      <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:SP.lg}}>
+        {MOBILITY.map(m=>{
+          const done = !!log?.[doneMobilityKey(date,m.id)];
+          return (
+            <button key={m.id} onClick={()=>selectTab(m.id)}
+              style={{background:tabId===m.id?W+"18":C.card,border:`2px solid ${tabId===m.id?W:C.border}`,
+                borderRadius:9,padding:"12px 16px",cursor:"pointer",textAlign:"left",fontFamily:"Georgia,serif",
+                display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+              <div style={{fontSize:13,color:tabId===m.id?W:C.text,fontWeight:tabId===m.id?700:400}}>After {m.after}, Before {m.before}</div>
+              {done&&<span style={{color:W,fontSize:14,flexShrink:0}}>✓</span>}
+            </button>
+          );
+        })}
+      </div>
+      <Card style={{padding:SP.md,boxShadow:`0 0 16px ${W}1c`,border:`1px solid ${W}33`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:6}}>
+          <div style={{fontSize:9,color:W,letterSpacing:2,fontFamily:"monospace",textTransform:"uppercase"}}>
+            After {plan.after}, Before {plan.before}
+          </div>
+          {!editing&&<button onClick={startEdit} style={{background:"none",border:`1px solid ${W}44`,borderRadius:6,color:W,fontSize:10,padding:"4px 9px",cursor:"pointer",fontFamily:"Georgia,serif",flexShrink:0}}>✎ Edit</button>}
+        </div>
+        <div style={{fontSize:12,color:C.textMid,lineHeight:1.6,marginBottom:14}}>{plan.focus}</div>
+
+        {!editing && <div style={{display:"flex",flexDirection:"column",gap:9,marginBottom:16}}>
+          {items.map((it,i)=>(
+            <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+              <div style={{width:20,height:20,borderRadius:"50%",border:`1px solid ${W}55`,color:W,
+                fontSize:10,fontFamily:"monospace",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{i+1}</div>
+              <div style={{fontSize:13,color:C.text,lineHeight:1.5}}>{it}</div>
+            </div>
+          ))}
+        </div>}
+
+        {editing && <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+          {draft.map((t,i)=>(
+            <div key={i} style={{display:"flex",gap:8,alignItems:"center"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:3,flexShrink:0}}>
+                <button onClick={()=>moveDraftItem(i,-1)} disabled={i===0} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===0?C.textLow:C.text,fontSize:10,cursor:i===0?"default":"pointer",lineHeight:1,opacity:i===0?.4:1}}>▲</button>
+                <button onClick={()=>moveDraftItem(i,1)} disabled={i===draft.length-1} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===draft.length-1?C.textLow:C.text,fontSize:10,cursor:i===draft.length-1?"default":"pointer",lineHeight:1,opacity:i===draft.length-1?.4:1}}>▼</button>
+              </div>
+              <input value={t} onChange={e=>updateDraftItem(i,e.target.value)}
+                style={{flex:1,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:7,color:C.text,fontSize:12,
+                  padding:"9px 10px",fontFamily:"Georgia,serif",outline:"none",boxSizing:"border-box"}}/>
+              <button onClick={()=>removeDraftItem(i)} style={{background:"none",border:`1px solid ${C.warn}44`,borderRadius:6,color:C.warn,fontSize:13,width:30,height:30,cursor:"pointer",flexShrink:0}}>✕</button>
+            </div>
+          ))}
+          <button onClick={addDraftItem} style={{background:"none",border:`1px dashed ${W}55`,borderRadius:7,color:W,fontSize:12,padding:"9px 0",cursor:"pointer",fontFamily:"Georgia,serif"}}>+ Add Step</button>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:4}}>
+            <button onClick={cancelEdit} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.textMid,fontSize:12,padding:"10px 0",cursor:"pointer",fontFamily:"Georgia,serif"}}>Cancel</button>
+            <button onClick={saveEdit} style={{background:W+"18",border:`1px solid ${W}`,borderRadius:7,color:W,fontSize:12,padding:"10px 0",cursor:"pointer",fontFamily:"Georgia,serif",fontWeight:700}}>Save</button>
+          </div>
+        </div>}
+
+        {!editing && <button onClick={toggleComplete}
+          style={{width:"100%",background:completedToday?W:`linear-gradient(135deg,${W}22,${W}11)`,
+            border:`1.5px solid ${W}`,borderRadius:10,color:completedToday?"#000":W,fontSize:14,fontWeight:700,
+            padding:SP.md,cursor:"pointer",fontFamily:"Georgia,serif",
+            boxShadow:`0 0 20px ${W}33`}}>
+          {completedToday?`✓ Marked Complete — ${isToday?"Today":fmtDate(date)}`:`Mark Complete — ${isToday?"Today":fmtDate(date)}`}
+        </button>}
+        {!editing && <div style={{fontSize:9,color:C.textLow,textAlign:"center",marginTop:8}}>Completed mobility days show up in your Consistency heatmap only.</div>}
+      </Card>
     </div>
   </div>;
 }
@@ -1896,6 +1945,7 @@ export default function App(){
   const [saved,setSaved]=useState(false);
   const [view,setView]=useState("home");
   const [active,setActive]=useState(null);
+  const [mobilityActive,setMobilityActive]=useState(null);
   const [prevView,setPrevView]=useState("home");
   const [importMsg,setImportMsg]=useState("");
   const [confirmClear,setConfirmClear]=useState(false);
@@ -1925,6 +1975,7 @@ export default function App(){
   },[]);
 
   function openSession(sid,date,from="home"){setActive({sessId:sid,date});setPrevView(from);setView("session");}
+  function openMobility(planId,date,from="home"){setMobilityActive({planId,date});setPrevView(from);setView("mobility");}
   function goBack(){setView(prevView==="history"?"history":"home");}
 
   function deleteSession(date,sessId){
@@ -1958,6 +2009,12 @@ export default function App(){
     setStore(s=>{
       const cc=(s&&typeof s.customCooldowns==="object"&&!Array.isArray(s.customCooldowns))?s.customCooldowns:{};
       return { ...s, customCooldowns:{ ...cc, [sid]:newList } };
+    });
+  }
+  function saveMobilityList(planId,newList){
+    setStore(s=>{
+      const cm=(s&&typeof s.customMobility==="object"&&!Array.isArray(s.customMobility))?s.customMobility:{};
+      return { ...s, customMobility:{ ...cm, [planId]:newList } };
     });
   }
   const resolvedExercises = useMemo(()=>resolveAllExercises(store.customExercises), [store.customExercises]);
@@ -2017,22 +2074,26 @@ export default function App(){
     e.target.value="";
   }
 
-  const totalDone=Object.keys(store.log??{}).filter(k=>k.startsWith("done__")).length;
-  const prs=[];Object.keys(resolvedExercises).forEach(sid=>{(resolvedExercises[sid]??[]).filter(e=>e.weighted).forEach(ex=>{const vals=getAllWeights(store.log,sid,ex.id);if(vals.length)prs.push({name:ex.name,icon:ex.icon,kg:Math.max(...vals),color:SESSIONS.find(s=>s.id===sid)?.color??C.gold});});});
-  prs.sort((a,b)=>b.kg-a.kg);
-  const recent=Object.keys(store.log??{}).filter(k=>k.startsWith("done__")).map(k=>{const rest=k.slice(6);const sep=rest.lastIndexOf("__");if(sep<0)return null;const date=rest.slice(0,sep);const sessId=rest.slice(sep+2);return isValidDate(date)&&sessId?{date,sessId}:null;}).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,2);
+  const totalDone=useMemo(()=>Object.keys(store.log??{}).filter(k=>k.startsWith("done__")).length,[store.log]);
+  const prs=useMemo(()=>{
+    const list=[];
+    Object.keys(resolvedExercises).forEach(sid=>{(resolvedExercises[sid]??[]).filter(e=>e.weighted).forEach(ex=>{const vals=getAllWeights(store.log,sid,ex.id);if(vals.length)list.push({name:ex.name,icon:ex.icon,kg:Math.max(...vals),color:SESSIONS.find(s=>s.id===sid)?.color??C.gold});});});
+    list.sort((a,b)=>b.kg-a.kg);
+    return list;
+  },[store.log,resolvedExercises]);
+  const recent=useMemo(()=>Object.keys(store.log??{}).filter(k=>k.startsWith("done__")).map(k=>{const rest=k.slice(6);const sep=rest.lastIndexOf("__");if(sep<0)return null;const date=rest.slice(0,sep);const sessId=rest.slice(sep+2);return isValidDate(date)&&sessId?{date,sessId}:null;}).filter(Boolean).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,2),[store.log]);
 
-  const recoveryData=["push","pull","legs","sprint"].map(sid=>{
+  const recoveryData=useMemo(()=>["push","pull","legs","sprint"].map(sid=>{
     const sess=SESSIONS.find(s=>s.id===sid);
     const last=getLastTrainedDate(store.log,sid);
     const days=last?daysSince(last):null;
     return {sid,sess,days};
-  });
-  const recommended=recoveryData.filter(r=>r.sid!=="sprint").slice().sort((a,b)=>{
+  }),[store.log]);
+  const recommended=useMemo(()=>recoveryData.filter(r=>r.sid!=="sprint").slice().sort((a,b)=>{
     if(a.days==null) return -1;
     if(b.days==null) return 1;
     return b.days-a.days;
-  })[0];
+  })[0],[recoveryData]);
 
   if(showSplash) return <SplashScreen onDone={()=>setShowSplash(false)}/>;
 
@@ -2048,7 +2109,8 @@ export default function App(){
   if(view==="session"&&active)return wrap(<SessionView sessId={active.sessId} date={active.date} log={store.log} onLog={onLog} onBack={goBack} onComplete={()=>setView("summary")} exList={resolvedExercises[active.sessId]} warmupList={(store.customWarmups?.[active.sessId]?.length?store.customWarmups[active.sessId]:null)??WARMUPS[active.sessId]??[]} cooldownList={(store.customCooldowns?.[active.sessId]?.length?store.customCooldowns[active.sessId]:null)??COOLDOWNS[active.sessId]??[]} onEdit={()=>openExerciseEditor(active.sessId)}/>);
   if(view==="editExercises"&&active)return wrap(<ExerciseEditorView sessId={active.sessId} exList={resolvedExercises[active.sessId]??[]} warmupList={(store.customWarmups?.[active.sessId]?.length?store.customWarmups[active.sessId]:null)??WARMUPS[active.sessId]??[]} cooldownList={(store.customCooldowns?.[active.sessId]?.length?store.customCooldowns[active.sessId]:null)??COOLDOWNS[active.sessId]??[]} onSave={saveExerciseList} onSaveWarmup={saveWarmupList} onSaveCooldown={saveCooldownList} onBack={()=>setView("session")}/>);
   if(view==="summary"&&active)return wrap(<CompletionSummary sessId={active.sessId} date={active.date} log={store.log} onDone={()=>setView("history")} exList={resolvedExercises[active.sessId]}/>);
-  if(view==="start")return wrap(<StartPicker onStart={(s,d)=>openSession(s,d,"home")} onBack={()=>setView("home")}/>);
+  if(view==="start")return wrap(<StartPicker onStart={(s,d)=>openSession(s,d,"home")} onStartMobility={(p,d)=>openMobility(p,d,"home")} onBack={()=>setView("home")} themeMode={themeMode}/>);
+  if(view==="mobility")return wrap(<MobilityView log={store.log} onLog={onLog} customMobility={store.customMobility} onSaveMobility={saveMobilityList} initialDate={mobilityActive?.date} initialPlanId={mobilityActive?.planId} onBack={()=>{setMobilityActive(null);setView("home");}} themeMode={themeMode}/>);
   if(view==="history")return wrap(<HistoryView log={store.log} onOpen={(s,d)=>openSession(s,d,"history")} onBack={()=>setView("home")} exercises={resolvedExercises} onDeleteSession={deleteSession}/>);
   if(view==="progress")return wrap(<ProgressView log={store.log} onBack={()=>setView("home")} exercises={resolvedExercises}/>);
 
@@ -2087,13 +2149,13 @@ export default function App(){
               boxShadow:`0 0 14px ${item.color}28`,position:"relative",overflow:"hidden"}}>
               <div style={{position:"absolute",top:0,left:0,right:0,height:2,
                 background:`linear-gradient(90deg,transparent,${item.color}88,transparent)`,
-                backgroundSize:"200% 100%",animation:"_inShimmer 2.8s linear infinite"}}/>
+                backgroundSize:"200% 100%",animation:"_inShimmer 2.8s linear 1"}}/>
               <div style={{position:"absolute",inset:0,
                 background:`radial-gradient(circle at 50% 60%,${item.color}08 0%,transparent 70%)`,
-                animation:"_inGlowPulse 3.2s ease-in-out infinite",pointerEvents:"none"}}/>
+                animation:"_inGlowPulse 3.2s ease-in-out 2",pointerEvents:"none"}}/>
               <div style={{fontSize:22,color:item.color,fontWeight:700,lineHeight:1,
                 textShadow:`0 0 14px ${item.color}99`,
-                animation:"_inBeat 4s ease-in-out infinite",position:"relative"}}>{count}</div>
+                animation:"_inBeat 4s ease-in-out 2",position:"relative"}}>{count}</div>
               <div style={{fontSize:8,color:C.textLow,marginTop:4,letterSpacing:1,fontFamily:"monospace",textTransform:"uppercase",position:"relative"}}>{item.label}</div>
             </div>;
           })}
@@ -2110,27 +2172,31 @@ export default function App(){
       </Button>
       <SectionHeader>Quick Start — Today</SectionHeader>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:SP.md}}>
-        {SESSIONS.map((s,si)=>(
-          <button key={s.id} onClick={()=>openSession(s.id,todayStr(),"home")}
+        {[...SESSIONS.map(s=>({...s,onClick:()=>openSession(s.id,todayStr(),"home"),sub2:s.loc})),
+          {id:"mobility",label:"Mobility",color:themeMode==="light"?"#000000":"#ffffff",onClick:()=>setView("mobility"),sub2:"Rest day mobility"}
+        ].map((s,si)=>(
+          <button key={s.id} onClick={s.onClick}
             style={{background:`linear-gradient(160deg,${s.color}12,${C.card})`,
               border:`1px solid ${s.color}55`,borderRadius:12,padding:"15px 12px",
               cursor:"pointer",textAlign:"left",fontFamily:"Georgia,serif",
               boxShadow:`0 0 18px ${s.color}2a`,position:"relative",overflow:"hidden",
               transition:"box-shadow .2s,transform .15s",
+              gridColumn:s.id==="mobility"?"1 / -1":undefined,
               animation:`_inSlideUp .4s cubic-bezier(.22,1,.36,1) ${si*.07}s both`}}>
             {/* animated top shimmer bar */}
             <div style={{position:"absolute",top:0,left:0,right:0,height:1.5,
               background:`linear-gradient(90deg,transparent,${s.color}aa,transparent)`,
-              backgroundSize:"200% 100%",animation:"_inShimmer 2.5s linear infinite",opacity:.9}}/>
+              backgroundSize:"200% 100%",animation:"_inShimmer 2.5s linear 1",opacity:.9}}/>
             {/* subtle inner glow pulse */}
             <div style={{position:"absolute",inset:0,
               background:`radial-gradient(ellipse at 30% 40%,${s.color}0c 0%,transparent 65%)`,
-              animation:`_inGlowPulse ${2.8+si*.3}s ease-in-out ${si*.4}s infinite`,pointerEvents:"none"}}/>
-            <div style={{fontSize:22,marginBottom:6,position:"relative",
-              animation:`_inFloat ${3.5+si*.4}s ease-in-out ${si*.5}s infinite`}}>{s.icon}</div>
+              animation:`_inGlowPulse ${2.8+si*.3}s ease-in-out ${si*.4}s 2`,pointerEvents:"none"}}/>
+            <div style={{marginBottom:8,position:"relative",animation:`_inFloat ${3.5+si*.4}s ease-in-out ${si*.5}s 2`}}>
+              <IconBox color={s.color} size={20}/>
+            </div>
             <div style={{fontSize:12,color:s.color,fontWeight:700,
               textShadow:`0 0 10px ${s.color}88`,position:"relative"}}>{s.label}</div>
-            <div style={{fontSize:9,color:C.textLow,marginTop:2,position:"relative"}}>{s.loc}</div>
+            <div style={{fontSize:9,color:C.textLow,marginTop:2,position:"relative"}}>{s.sub2}</div>
           </button>
         ))}
       </div>
@@ -2146,7 +2212,7 @@ export default function App(){
 
       <SectionHeader color={C.pull} style={{textShadow:`0 0 8px ${C.pull}`}}>Consistency</SectionHeader>
       <Card style={{padding:SP.md,marginBottom:SP.md,boxShadow:`0 0 12px ${C.pull}18`}}>
-        <Heatmap log={store.log}/>
+        <Heatmap log={store.log} themeMode={themeMode}/>
       </Card>
 
       {prs.slice(0,3).length>0&&<><SectionHeader color={C.gold}>Recent PRs</SectionHeader><Card style={{padding:`${SP.sm}px ${SP.md}px`,marginBottom:SP.md}}>{prs.slice(0,3).map((p,i)=>(
@@ -2160,7 +2226,7 @@ export default function App(){
 ))}</Card></>}
       {recent.length>0&&<><SectionHeader color={C.textMid}>Recent</SectionHeader>{recent.map(r=>{const m=SESSIONS.find(s=>s.id===r.sessId)??{icon:"?",label:r.sessId,color:C.textMid};return <div key={`${r.date}__${r.sessId}`} onClick={()=>openSession(r.sessId,r.date,"home")} style={{background:`linear-gradient(135deg,${m.color}08,${C.card})`,border:`1px solid ${m.color}33`,borderRadius:11,padding:"11px 13px",marginBottom:7,cursor:"pointer",display:"grid",gridTemplateColumns:"44px 1fr auto",gap:SP.sm,alignItems:"center",boxShadow:`0 0 8px ${m.color}14`,position:"relative",overflow:"hidden"}}>
     <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${m.color}44,transparent)`,opacity:.7}}/>
-    <div style={{width:37,height:37,borderRadius:9,background:m.color+"18",border:`1px solid ${m.color}40`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{m.icon}</div>
+    <IconBox color={m.color} size={20}/>
     <div><div style={{fontSize:13,color:C.text}}>{m.label}</div><div style={{fontSize:10,color:C.textLow,marginTop:1,fontFamily:"monospace"}}>{fmtDate(r.date)}</div></div>
     <div style={{fontSize:18,color:m.color,opacity:.6}}>›</div>
   </div>;})}</>}
@@ -2178,7 +2244,7 @@ export default function App(){
             {/* shimmer */}
             <div style={{position:"absolute",inset:0,
               background:"linear-gradient(105deg,transparent 30%,rgba(255,255,255,.07) 50%,transparent 70%)",
-              backgroundSize:"300% 100%",animation:"_inShimmer 3s linear infinite",pointerEvents:"none"}}/>
+              backgroundSize:"300% 100%",animation:"_inShimmer 3s linear 1",pointerEvents:"none"}}/>
             <span style={{position:"relative"}}>{nb.label}</span>
           </button>
         ))}
