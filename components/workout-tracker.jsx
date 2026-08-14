@@ -111,7 +111,8 @@ const EXERCISES = {
     { id:"tricep_pushdown",   name:"Tricep Pushdown (Rope)",    icon:"⬇",weighted:true,  sets:2,   reps:"12–15",  tempo:"2-0-1-2", focus:"Elbows locked to ribs · flare rope at lockout" },
   ],
   pull:[
-    { id:"pullups",           name:"Neutral-Grip Pull-Ups",     icon:"🤸",weighted:false, sets:"3–4", reps:"max",    tempo:"3-1-1-1", focus:"Shrug down before pulling · dead hang at bottom · use straps" },
+    { id:"pullups",           name:"Neutral-Grip Pull-Ups",     icon:"🤸",weighted:false, logMode:"reps", sets:"3–4", reps:"max",    tempo:"3-1-1-1", focus:"Shrug down before pulling · dead hang at bottom · use straps" },
+    { id:"weighted_pullups",  name:"Weighted Pull-Ups",         icon:"🏋",weighted:true,  logMode:"reps_weight", sets:"3–4", reps:"6–10",   tempo:"3-1-1-1", focus:"Add weight via dip belt once bodyweight pull-ups exceed 10–12 clean reps · shrug down before pulling, dead hang at bottom · use straps" },
     { id:"tbar_row",          name:"Chest-Supported T-Bar Row", icon:"🏋",weighted:true,  sets:3,   reps:"8–10",   tempo:"2-0-1-2", focus:"Chest glued to pad — removes lower back from the lift entirely · use straps" },
     { id:"lat_pulldown_single",name:"Single-Arm Lat Pulldown",  icon:"⬇",weighted:true,  sets:2,   reps:"12–15",  tempo:"2-1-1-0", focus:"Pull elbow to back pocket · use straps" },
     { id:"incline_curl",      name:"Incline DB Bicep Curl",     icon:"💪",weighted:true,  sets:2,   reps:"10–12",  tempo:"3-0-1-0", focus:"Elbows pinned · full stretch at bottom" },
@@ -128,7 +129,7 @@ const EXERCISES = {
     { id:"back_extension",    name:"Back Extension",            icon:"🔼",weighted:false, sets:2,   reps:"12–15",  tempo:"2-0-1-1", focus:"Neutral spine throughout · squeeze glutes at top · posterior chain support" },
   ],
   sprint:[
-    { id:"sprint_main",       name:"40–50m Sprints",            icon:"💨",weighted:false, sets:"5–6", reps:"@ 100%", rest:"2–3 min", focus:"Full rest between every sprint — non-negotiable, the energy system needs the full window to reload. Stop the session entirely if speed visibly drops on any rep." },
+    { id:"sprint_main",       name:"40–50m Sprints",            icon:"💨",weighted:false, sets:"5–6", reps:"Max effort", rest:"2–3 min", focus:"Full rest between every sprint — non-negotiable, the energy system needs the full window to reload. Stop the session entirely if speed visibly drops on any rep." },
   ],
 };
 
@@ -138,7 +139,7 @@ const WARMUPS = {
       "Doorway thoracic extension × 3×15s — opens the upper back before any pressing",
       "Wall scapular push-ups × 1×10 — shoulder blade control before load",
       "Controlled arm screws × 1×10 — rotator cuff prep, arms out in a T, rotate slowly forward and back",
-      "2 feeder sets on Incline DB Press × 2×6 @ 50% — never go straight into heavy sets cold",
+      "2 feeder sets on Incline DB Press × 2×6 light — never go straight into heavy sets cold",
     ]},
   ],
   pull:[
@@ -165,7 +166,7 @@ const WARMUPS = {
       "High knees",
       "Butt kicks",
       "A-skips",
-      "3 progressive runs at 50% / 70% / 85% over 60m",
+      "3 progressive runs, easy → moderate → fast, over 60m",
     ]},
   ],
 };
@@ -197,6 +198,21 @@ const COOLDOWNS = {
 };
 
 const makeKey  = (d,s,e) => `${d}__${s}__${e}`;
+// Log keys come in 4 shapes: "date__sessId__exId"(__setreps), "wu__date__sessId__item",
+// "cd__date__sessId__item", "done__date__sessId". Always parse through this instead of a raw
+// split("__") — each prefix shifts indices differently, and "done__" has no third segment.
+function parseLogKey(k){
+  if(k.startsWith("done__")){
+    const rest=k.slice(6);
+    const sep=rest.lastIndexOf("__");
+    return sep<0 ? {date:null,sessId:null} : {date:rest.slice(0,sep),sessId:rest.slice(sep+2)};
+  }
+  let rest=k;
+  if(rest.startsWith("wu__")) rest=rest.slice(4);
+  else if(rest.startsWith("cd__")) rest=rest.slice(4);
+  const parts=rest.split("__");
+  return { date:parts[0], sessId:parts[1] };
+}
 const doneKey  = (d,s)   => `done__${d}__${s}`;
 const doneMobilityKey = (d,p) => `doneMobility__${d}__${p}`;
 const todayStr = ()      => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
@@ -297,6 +313,27 @@ function getCompletionStats(log, sessId, date, exList) {
   return { done, total: exList.length, pct: Math.round((done / exList.length) * 100) };
 }
 
+// Flattens a warmup/cooldown list (plain strings, or phase objects with
+// {name,time,items}) into checkable rows with stable keys for logging.
+function flattenChecklist(list){
+  const flat=[];
+  (list||[]).forEach((item,i)=>{
+    if(typeof item==="string"){ flat.push({key:`${i}`,label:item}); }
+    else { (item.items??[]).forEach((it,j)=>{ flat.push({key:`${i}-${j}`,label:it}); }); }
+  });
+  return flat;
+}
+
+// True when the last `minSessions` logged values for a weighted/count
+// exercise are flat or declining — a simple plateau/deload signal.
+function detectPlateau(log,sid,eid,minSessions=3){
+  const vals=getAllWeights(log,sid,eid);
+  if(vals.length<minSessions) return false;
+  const recent=vals.slice(-minSessions);
+  for(let i=1;i<recent.length;i++){ if(recent[i]>recent[i-1]) return false; }
+  return true;
+}
+
 // Main-workout exercises a user has customised override the shipped defaults
 // for that session — warmup/cooldown are never touched by this.
 function resolveExercises(customExercises, sessId) {
@@ -372,6 +409,177 @@ const GLOBAL_CSS = `
   @keyframes _inBeat      { 0%,100%{transform:scale(1)} 40%{transform:scale(1.12)} 60%{transform:scale(.97)} }
   @keyframes _inFloat     { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
   @keyframes _inRingPing  { 0%{transform:scale(1);opacity:.8} 100%{transform:scale(2.2);opacity:0} }
+
+  /* ── FX1: PR celebration spark burst (ExRow PR badge) ─────────────── */
+  /* Remove this block + its usage (search "FX1") to disable. */
+  @keyframes _fx1Spark {
+    0%   { transform:translate(-50%,-50%) rotate(var(--fx1ang)) translateX(0) scale(1); opacity:1; }
+    100% { transform:translate(-50%,-50%) rotate(var(--fx1ang)) translateX(16px) scale(.2); opacity:0; }
+  }
+
+  /* ── FX2: session-complete celebration pop (SessionView button) ───── */
+  /* Remove this block + its usage (search "FX2") to disable. */
+  @keyframes _fx2Pop {
+    0%   { transform:scale(.4); opacity:0; }
+    55%  { transform:scale(1.3); opacity:1; }
+    100% { transform:scale(1); opacity:0; }
+  }
+  @keyframes _fx2Ring {
+    0%   { transform:scale(.6); opacity:.9; }
+    100% { transform:scale(2.4); opacity:0; }
+  }
+
+  /* ── FX3: stat count-up flash (ProgressView Graph stat tiles) ─────── */
+  /* Remove this block + its usage (search "FX3") to disable. */
+  @keyframes _fx3Flash {
+    0%   { opacity:.3; transform:translateY(2px); }
+    100% { opacity:1; transform:translateY(0); }
+  }
+
+  /* ── FX4: sliding tab underline now uses a CSS transition on transform (see
+     ExerciseEditorView tabs), not a keyframe — nothing to inject here anymore. */
+
+  /* ── FX5: recovery bars stagger-fill on Home load ──────────────────── */
+  /* Remove this block + its usage (search "FX5") to disable. */
+  @keyframes _fx5FillIn {
+    0%   { transform:scaleX(0); }
+    100% { transform:scaleX(1); }
+  }
+
+  /* ── FX6: heatmap cells ripple in on first render (Consistency) ───── */
+  /* Remove this block + its usage (search "FX6") to disable. */
+  @keyframes _fx6Ripple {
+    0%   { opacity:0; transform:scale(.4); }
+    100% { opacity:1; transform:scale(1); }
+  }
+
+  /* ── FX7: app-wide button press bounce ─────────────────────────────── */
+  /* Applies to every <button> via a plain CSS rule — no per-button JS or
+     inline styles needed. Transform-only, GPU-composited. Remove this
+     rule (search "FX7") to disable app-wide. */
+  button{transition:transform .12s cubic-bezier(.34,1.56,.64,1);}
+  button:active{transform:scale(.96);}
+
+  /* ── FX8: view-switch slide+fade entrance (App wrap()) ─────────────── */
+  /* Remove this block + its usage (search "FX8") to disable. */
+  @keyframes _fx8ViewIn {
+    0%   { opacity:0; transform:translateX(10px); }
+    100% { opacity:1; transform:translateX(0); }
+  }
+
+  /* ── FX9: Home streak-bar stagger-fill + PR-row shimmer + recent-card entrance ── */
+  /* Remove this block + its usage (search "FX9") to disable. */
+  @keyframes _fx9BarFill {
+    0%   { transform:scaleY(0); opacity:.3; }
+    100% { transform:scaleY(1); opacity:1; }
+  }
+  @keyframes _fx9Shimmer {
+    0%   { background-position:200% 0; }
+    100% { background-position:-200% 0; }
+  }
+  @keyframes _fx9CardIn {
+    0%   { opacity:0; transform:translateY(6px); }
+    100% { opacity:1; transform:translateY(0); }
+  }
+
+  /* ── FX10: progress-chart line draw-in + history-list stagger entrance ── */
+  /* Remove this block + its usage (search "FX10") to disable. */
+  @keyframes _fx10Draw {
+    to { stroke-dashoffset:0; }
+  }
+  @keyframes _fx10RowIn {
+    0%   { opacity:0; transform:translateY(5px); }
+    100% { opacity:1; transform:translateY(0); }
+  }
+
+  /* ── FX11: Data-screen action feedback — success pulse / error shake ── */
+  /* Remove this block + its usage (search "FX11") to disable. */
+  @keyframes _fx11Success {
+    0%   { transform:scale(1); }
+    35%  { transform:scale(1.045); }
+    100% { transform:scale(1); }
+  }
+  @keyframes _fx11Shake {
+    0%,100% { transform:translateX(0); }
+    20%     { transform:translateX(-4px); }
+    40%     { transform:translateX(4px); }
+    60%     { transform:translateX(-3px); }
+    80%     { transform:translateX(3px); }
+  }
+
+  /* ── FX12: Button tap ripple ────────────────────────────────────────── */
+  /* Remove this block + its usage (search "FX12") to disable. */
+  @keyframes _fx12Ripple {
+    0%   { transform:scale(0); opacity:.5; }
+    100% { transform:scale(8); opacity:0; }
+  }
+
+  /* ── FX13: IconBox bounce-in on mount ───────────────────────────────── */
+  /* Remove this block + its usage (search "FX13") to disable. */
+  @keyframes _fx13IconIn {
+    0%   { transform:scale(0); opacity:0; }
+    60%  { transform:scale(1.15); opacity:1; }
+    100% { transform:scale(1); opacity:1; }
+  }
+
+  /* ── FX14: Checkbox tick pop ────────────────────────────────────────── */
+  /* Remove this block + its usage (search "FX14") to disable. */
+  @keyframes _fx14TickPop {
+    0%   { transform:scale(0); opacity:0; }
+    55%  { transform:scale(1.3); opacity:1; }
+    100% { transform:scale(1); opacity:1; }
+  }
+
+  /* ── FX15: History delete-confirm panel slide-down entrance ────────── */
+  /* Remove this block + its usage (search "FX15") to disable. */
+  @keyframes _fx15ConfirmIn {
+    0%   { opacity:0; transform:scaleY(.7) translateY(-4px); }
+    100% { opacity:1; transform:scaleY(1) translateY(0); }
+  }
+
+  /* ── FX16: glow-variant Card fade+lift entrance on mount ────────────── */
+  /* Remove this block + its usage (search "FX16") to disable. */
+  @keyframes _fx16CardIn {
+    0%   { opacity:0; transform:translateY(6px); }
+    100% { opacity:1; transform:translateY(0); }
+  }
+
+  /* ── FX17: StartPicker selected-tile checkmark pop-in ───────────────── */
+  /* Remove this block + its usage (search "FX17") to disable. */
+  @keyframes _fx17TilePop {
+    0%   { transform:scale(0); opacity:0; }
+    60%  { transform:scale(1.25); opacity:1; }
+    100% { transform:scale(1); opacity:1; }
+  }
+
+  /* ── FX18: WeightInput focus ring pulse (one-shot, per focus event) ─── */
+  /* Remove this block + its usage (search "FX18") to disable. */
+  @keyframes _fx18FocusPulse {
+    0%   { opacity:.6; transform:scale(1); }
+    100% { opacity:0; transform:scale(1.18); }
+  }
+
+  /* ── FX19: Edit Workout warm-up/cool-down row stagger entrance ─────── */
+  /* Remove this block + its usage (search "FX19") to disable. */
+  @keyframes _fx19RowIn {
+    0%   { opacity:0; transform:translateY(5px); }
+    100% { opacity:1; transform:translateY(0); }
+  }
+
+  /* ── FX20: Edit Workout emoji picker panel pop-in ───────────────────── */
+  /* Remove this block + its usage (search "FX20") to disable. */
+  @keyframes _fx20PickerIn {
+    0%   { opacity:0; transform:scale(.9) translateY(-4px); }
+    100% { opacity:1; transform:scale(1) translateY(0); }
+  }
+
+  /* ── FX21: Edit Workout mode-select button pop on selection ────────── */
+  /* Remove this block + its usage (search "FX21") to disable. */
+  @keyframes _fx21ModePop {
+    0%   { transform:scale(.88); }
+    55%  { transform:scale(1.06); }
+    100% { transform:scale(1); }
+  }
 `;
 // CSS injected once via module scope
 (()=>{if(typeof document!=="undefined"&&!document.getElementById("_appCss")){const el=document.createElement("style");el.id="_appCss";el.textContent=GLOBAL_CSS;document.head.appendChild(el);}})();
@@ -381,7 +589,7 @@ const GLOBAL_CSS = `
 // 30-day simulated training run: train/rest alternating, push→pull→legs→push→pull→sprint cycle
 // Weights: +2.5kg/week, -5kg on week 3 (deload), +2.5kg week 4
 // Inject via the "Load Test Data" button in Backup & Transfer section
-const TEST_STORE = {"log": {"2026-05-29__push__incline_db_press": 24.0, "2026-05-29__push__machine_chest_press": 50.0, "2026-05-29__push__lateral_raises": 8.0, "2026-05-29__push__cable_face_pulls": 14.0, "2026-05-29__push__tricep_pushdown": 18.0, "done__2026-05-29__push": true, "2026-05-31__pull__pullups": true, "2026-05-31__pull__tbar_row": 40.0, "2026-05-31__pull__lat_pulldown_single": 20.0, "2026-05-31__pull__incline_curl": 10.0, "2026-05-31__pull__hammer_curl": 12.0, "2026-05-31__pull__pallof_press": 16.0, "done__2026-05-31__pull": true, "2026-06-02__legs__hip_thrust": 60.0, "2026-06-02__legs__leg_press": 80.0, "2026-06-02__legs__leg_extension": 30.0, "2026-06-02__legs__seated_leg_curl": 28.0, "2026-06-02__legs__seated_calf": 22.0, "2026-06-02__legs__rkc_plank": true, "2026-06-02__legs__back_extension": true, "done__2026-06-02__legs": true, "2026-06-04__push__incline_db_press": 24.0, "2026-06-04__push__machine_chest_press": 50.0, "2026-06-04__push__lateral_raises": 8.0, "2026-06-04__push__cable_face_pulls": 14.0, "2026-06-04__push__tricep_pushdown": 18.0, "done__2026-06-04__push": true, "2026-06-06__pull__pullups": true, "2026-06-06__pull__tbar_row": 42.5, "2026-06-06__pull__lat_pulldown_single": 22.5, "2026-06-06__pull__incline_curl": 12.5, "2026-06-06__pull__hammer_curl": 14.5, "2026-06-06__pull__pallof_press": 18.5, "done__2026-06-06__pull": true, "2026-06-08__sprint__sprint_main": true, "done__2026-06-08__sprint": true, "2026-06-10__push__incline_db_press": 26.5, "2026-06-10__push__machine_chest_press": 52.5, "2026-06-10__push__lateral_raises": 10.5, "2026-06-10__push__cable_face_pulls": 16.5, "2026-06-10__push__tricep_pushdown": 20.5, "done__2026-06-10__push": true, "2026-06-12__pull__pullups": true, "2026-06-12__pull__tbar_row": 45.0, "2026-06-12__pull__lat_pulldown_single": 25.0, "2026-06-12__pull__incline_curl": 15.0, "2026-06-12__pull__hammer_curl": 17.0, "2026-06-12__pull__pallof_press": 21.0, "done__2026-06-12__pull": true, "2026-06-14__legs__hip_thrust": 65.0, "2026-06-14__legs__leg_press": 85.0, "2026-06-14__legs__leg_extension": 35.0, "2026-06-14__legs__seated_leg_curl": 33.0, "2026-06-14__legs__seated_calf": 27.0, "2026-06-14__legs__rkc_plank": true, "2026-06-14__legs__back_extension": true, "done__2026-06-14__legs": true, "2026-06-16__push__incline_db_press": 29.0, "2026-06-16__push__machine_chest_press": 55.0, "2026-06-16__push__lateral_raises": 13.0, "2026-06-16__push__cable_face_pulls": 19.0, "2026-06-16__push__tricep_pushdown": 23.0, "done__2026-06-16__push": true, "2026-06-18__pull__pullups": true, "2026-06-18__pull__tbar_row": 45.0, "2026-06-18__pull__lat_pulldown_single": 25.0, "2026-06-18__pull__incline_curl": 15.0, "2026-06-18__pull__hammer_curl": 17.0, "2026-06-18__pull__pallof_press": 21.0, "done__2026-06-18__pull": true, "2026-06-20__sprint__sprint_main": true, "done__2026-06-20__sprint": true, "2026-06-22__push__incline_db_press": 24.0, "2026-06-22__push__machine_chest_press": 50.0, "2026-06-22__push__lateral_raises": 8.0, "2026-06-22__push__cable_face_pulls": 14.0, "2026-06-22__push__tricep_pushdown": 18.0, "done__2026-06-22__push": true, "2026-06-24__pull__pullups": true, "2026-06-24__pull__tbar_row": 40.0, "2026-06-24__pull__lat_pulldown_single": 20.0, "2026-06-24__pull__incline_curl": 10.0, "2026-06-24__pull__hammer_curl": 12.0, "2026-06-24__pull__pallof_press": 16.0, "done__2026-06-24__pull": true, "2026-06-26__legs__hip_thrust": 62.5, "2026-06-26__legs__leg_press": 82.5, "2026-06-26__legs__leg_extension": 32.5, "2026-06-26__legs__seated_leg_curl": 30.5, "2026-06-26__legs__seated_calf": 24.5, "2026-06-26__legs__rkc_plank": true, "2026-06-26__legs__back_extension": true, "done__2026-06-26__legs": true, "2026-06-28__push__incline_db_press": 26.5, "2026-06-28__push__machine_chest_press": 52.5, "2026-06-28__push__lateral_raises": 10.5, "2026-06-28__push__cable_face_pulls": 16.5, "2026-06-28__push__tricep_pushdown": 20.5, "done__2026-06-28__push": true}, "customExercises": {}, "customWarmups": {}, "customCooldowns": {}};
+const TEST_STORE = {"log": {"2026-01-01__push__incline_db_press": 24, "2026-01-01__push__machine_chest_press": 50, "2026-01-01__push__lateral_raises": 8, "2026-01-01__push__cable_face_pulls": 14, "2026-01-01__push__tricep_pushdown": 18, "done__2026-01-01__push": true, "2026-01-03__pull__tbar_row": 40, "2026-01-03__pull__lat_pulldown_single": 20, "2026-01-03__pull__incline_curl": 10, "2026-01-03__pull__hammer_curl": 12, "2026-01-03__pull__pallof_press": 16, "2026-01-03__pull__pullups": true, "done__2026-01-03__pull": true, "2026-01-05__legs__hip_thrust": 60, "2026-01-05__legs__leg_press": 80, "2026-01-05__legs__leg_extension": 30, "2026-01-05__legs__seated_leg_curl": 28, "2026-01-05__legs__seated_calf": 22, "2026-01-05__legs__rkc_plank": true, "2026-01-05__legs__back_extension": true, "done__2026-01-05__legs": true, "2026-01-07__push__incline_db_press": 26.5, "2026-01-07__push__machine_chest_press": 52.5, "2026-01-07__push__lateral_raises": 10.5, "2026-01-07__push__cable_face_pulls": 16.5, "2026-01-07__push__tricep_pushdown": 20.5, "done__2026-01-07__push": true, "2026-01-09__pull__tbar_row": 42.5, "2026-01-09__pull__lat_pulldown_single": 22.5, "2026-01-09__pull__incline_curl": 12.5, "2026-01-09__pull__hammer_curl": 14.5, "2026-01-09__pull__pallof_press": 18.5, "2026-01-09__pull__pullups": true, "done__2026-01-09__pull": true, "2026-01-11__sprint__sprint_main": true, "done__2026-01-11__sprint": true, "2026-01-13__push__incline_db_press": 24, "2026-01-13__push__machine_chest_press": 50, "2026-01-13__push__lateral_raises": 8, "2026-01-13__push__cable_face_pulls": 14, "2026-01-13__push__tricep_pushdown": 18, "done__2026-01-13__push": true, "2026-01-15__pull__tbar_row": 40, "2026-01-15__pull__lat_pulldown_single": 20, "2026-01-15__pull__incline_curl": 10, "2026-01-15__pull__hammer_curl": 12, "2026-01-15__pull__pallof_press": 16, "2026-01-15__pull__pullups": true, "done__2026-01-15__pull": true, "2026-01-17__legs__hip_thrust": 62.5, "2026-01-17__legs__leg_press": 82.5, "2026-01-17__legs__leg_extension": 32.5, "2026-01-17__legs__seated_leg_curl": 30.5, "2026-01-17__legs__seated_calf": 24.5, "2026-01-17__legs__rkc_plank": true, "2026-01-17__legs__back_extension": true, "done__2026-01-17__legs": true, "2026-01-19__push__incline_db_press": 29, "2026-01-19__push__machine_chest_press": 55, "2026-01-19__push__lateral_raises": 13, "2026-01-19__push__cable_face_pulls": 19, "2026-01-19__push__tricep_pushdown": 23, "done__2026-01-19__push": true, "2026-01-21__pull__tbar_row": 45, "2026-01-21__pull__lat_pulldown_single": 25, "2026-01-21__pull__incline_curl": 15, "2026-01-21__pull__hammer_curl": 17, "2026-01-21__pull__pallof_press": 21, "2026-01-21__pull__pullups": true, "done__2026-01-21__pull": true, "2026-01-23__sprint__sprint_main": true, "done__2026-01-23__sprint": true, "2026-01-25__push__incline_db_press": 24, "2026-01-25__push__machine_chest_press": 50, "2026-01-25__push__lateral_raises": 8, "2026-01-25__push__cable_face_pulls": 14, "2026-01-25__push__tricep_pushdown": 18, "done__2026-01-25__push": true, "2026-01-27__pull__tbar_row": 40, "2026-01-27__pull__lat_pulldown_single": 20, "2026-01-27__pull__incline_curl": 10, "2026-01-27__pull__hammer_curl": 12, "2026-01-27__pull__pallof_press": 16, "2026-01-27__pull__pullups": true, "done__2026-01-27__pull": true, "2026-01-29__legs__hip_thrust": 60, "2026-01-29__legs__leg_press": 80, "2026-01-29__legs__leg_extension": 30, "2026-01-29__legs__seated_leg_curl": 28, "2026-01-29__legs__seated_calf": 22, "2026-01-29__legs__rkc_plank": true, "2026-01-29__legs__back_extension": true, "done__2026-01-29__legs": true, "2026-01-31__push__incline_db_press": 26.5, "2026-01-31__push__machine_chest_press": 52.5, "2026-01-31__push__lateral_raises": 10.5, "2026-01-31__push__cable_face_pulls": 16.5, "2026-01-31__push__tricep_pushdown": 20.5, "done__2026-01-31__push": true, "2026-02-02__pull__tbar_row": 42.5, "2026-02-02__pull__lat_pulldown_single": 22.5, "2026-02-02__pull__incline_curl": 12.5, "2026-02-02__pull__hammer_curl": 14.5, "2026-02-02__pull__pallof_press": 18.5, "2026-02-02__pull__pullups": true, "done__2026-02-02__pull": true, "2026-02-04__sprint__sprint_main": true, "done__2026-02-04__sprint": true, "2026-02-06__push__incline_db_press": 24, "2026-02-06__push__machine_chest_press": 50, "2026-02-06__push__lateral_raises": 8, "2026-02-06__push__cable_face_pulls": 14, "2026-02-06__push__tricep_pushdown": 18, "done__2026-02-06__push": true, "2026-02-08__pull__tbar_row": 40, "2026-02-08__pull__lat_pulldown_single": 20, "2026-02-08__pull__incline_curl": 10, "2026-02-08__pull__hammer_curl": 12, "2026-02-08__pull__pallof_press": 16, "2026-02-08__pull__pullups": true, "done__2026-02-08__pull": true, "2026-02-10__legs__hip_thrust": 65, "2026-02-10__legs__leg_press": 85, "2026-02-10__legs__leg_extension": 35, "2026-02-10__legs__seated_leg_curl": 33, "2026-02-10__legs__seated_calf": 27, "2026-02-10__legs__rkc_plank": true, "2026-02-10__legs__back_extension": true, "done__2026-02-10__legs": true, "2026-02-12__push__incline_db_press": 29, "2026-02-12__push__machine_chest_press": 55, "2026-02-12__push__lateral_raises": 13, "2026-02-12__push__cable_face_pulls": 19, "2026-02-12__push__tricep_pushdown": 23, "done__2026-02-12__push": true, "2026-02-14__pull__tbar_row": 45, "2026-02-14__pull__lat_pulldown_single": 25, "2026-02-14__pull__incline_curl": 15, "2026-02-14__pull__hammer_curl": 17, "2026-02-14__pull__pallof_press": 21, "2026-02-14__pull__pullups": true, "done__2026-02-14__pull": true, "2026-02-16__sprint__sprint_main": true, "done__2026-02-16__sprint": true, "2026-02-18__push__incline_db_press": 24, "2026-02-18__push__machine_chest_press": 50, "2026-02-18__push__lateral_raises": 8, "2026-02-18__push__cable_face_pulls": 14, "2026-02-18__push__tricep_pushdown": 18, "done__2026-02-18__push": true, "2026-02-20__pull__tbar_row": 40, "2026-02-20__pull__lat_pulldown_single": 20, "2026-02-20__pull__incline_curl": 10, "2026-02-20__pull__hammer_curl": 12, "2026-02-20__pull__pallof_press": 16, "2026-02-20__pull__pullups": true, "done__2026-02-20__pull": true, "2026-02-22__legs__hip_thrust": 60, "2026-02-22__legs__leg_press": 80, "2026-02-22__legs__leg_extension": 30, "2026-02-22__legs__seated_leg_curl": 28, "2026-02-22__legs__seated_calf": 22, "2026-02-22__legs__rkc_plank": true, "2026-02-22__legs__back_extension": true, "done__2026-02-22__legs": true, "2026-02-24__push__incline_db_press": 26.5, "2026-02-24__push__machine_chest_press": 52.5, "2026-02-24__push__lateral_raises": 10.5, "2026-02-24__push__cable_face_pulls": 16.5, "2026-02-24__push__tricep_pushdown": 20.5, "done__2026-02-24__push": true, "2026-02-26__pull__tbar_row": 42.5, "2026-02-26__pull__lat_pulldown_single": 22.5, "2026-02-26__pull__incline_curl": 12.5, "2026-02-26__pull__hammer_curl": 14.5, "2026-02-26__pull__pallof_press": 18.5, "2026-02-26__pull__pullups": true, "done__2026-02-26__pull": true, "2026-02-28__sprint__sprint_main": true, "done__2026-02-28__sprint": true}, "customExercises": {}, "customWarmups": {}, "customCooldowns": {}};
 // ─────────────────────────────────────────────────────────────────────────────
 function lsLoad() {
   try {
@@ -408,10 +616,15 @@ function useDebouncedEffect(fn, deps, delay) {
 
 function Card({children,style,glow}){
   const g=glow||"transparent";
+  // FX16: every Card fades+lifts in on mount (one-shot, transform+opacity
+  // only — cheap even with several cards mounting together).
+  // Search "FX16" to remove: delete the animation line from the style object below.
   return(
     <div style={{background:C.card,border:`1px solid ${glow?g+"44":C.border}`,borderRadius:12,
       boxShadow:glow?`0 0 22px ${g}28, 0 2px 8px #00000044`:"0 2px 8px #00000033",
-      position:"relative",overflow:"hidden",...style}}>
+      position:"relative",overflow:"hidden",
+      animation:"_fx16CardIn .3s cubic-bezier(.22,1,.36,1) both",
+      ...style}}>
       {glow&&<div style={{position:"absolute",top:0,left:0,right:0,height:2,
         background:`linear-gradient(90deg,transparent,${g}aa,transparent)`,
         backgroundSize:"200% 100%",animation:"_inShimmer 2.2s linear 1",opacity:.85}}/>}
@@ -422,8 +635,21 @@ function Card({children,style,glow}){
 function Button({children,onClick,variant="primary",color,style}){
   const c=color||C.gold;
   const isPrimary=variant==="primary";
+  // FX12: tap ripple — one lightweight <span> spawned per tap at the exact
+  // tap coordinates, auto-removed after its fade-out animation ends. Search
+  // "FX12" to remove: delete this state, handleTap, the onClick wiring below,
+  // and the ripple-span render block.
+  const [ripples,setRipples]=useState([]);
+  const handleTap=e=>{
+    const rect=e.currentTarget.getBoundingClientRect();
+    const x=e.clientX-rect.left, y=e.clientY-rect.top;
+    const id=Date.now()+Math.random();
+    setRipples(r=>[...r,{id,x,y}]);
+    setTimeout(()=>setRipples(r=>r.filter(rp=>rp.id!==id)),500);
+    onClick&&onClick(e);
+  };
   return(
-    <button onClick={onClick} style={{
+    <button onClick={handleTap} style={{
       background:isPrimary?`linear-gradient(135deg,${c}22,${c}11)`:C.surfaceHi,
       border:`1.5px solid ${c}${isPrimary?"99":"44"}`,
       borderRadius:10,color:c,fontSize:14,fontFamily:"Georgia,serif",
@@ -444,6 +670,12 @@ function Button({children,onClick,variant="primary",color,style}){
         background:"linear-gradient(105deg,transparent 30%,rgba(255,255,255,.12) 50%,transparent 70%)",
         backgroundSize:"300% 100%",
         animation:"_inShimmer 2.5s linear 1",pointerEvents:"none"}}/>}
+      {/* FX12: tap ripple spans */}
+      {ripples.map(rp=>(
+        <span key={rp.id} style={{position:"absolute",left:rp.x,top:rp.y,width:10,height:10,
+          marginLeft:-5,marginTop:-5,borderRadius:"50%",background:c,opacity:.5,
+          pointerEvents:"none",animation:"_fx12Ripple .5s ease-out forwards"}}/>
+      ))}
       {children}
     </button>
   );
@@ -534,20 +766,19 @@ function SplashScreen({onDone}){
   },[]);
 
   useEffect(()=>{
-    const id=setInterval(()=>setPgPct(p=>p>=100?100:p+2.4),65);
+    const id=setInterval(()=>setPgPct(p=>p>=100?100:p+3.4),90);
     return()=>clearInterval(id);
   },[]);
 
-  // 30 dots + twinkle stars + corner brackets — still only transform+opacity
-  // (GPU-composited), no filters/blur, no animated shadows. Pushed further
-  // than the previous pass; if this stutters, the dot/star counts below are
-  // the first things to cut back.
-  const dots=useMemo(()=>Array.from({length:30},(_,i)=>({
-    x:6+((i*23)%88), y:6+((i*37)%88),
+  // Trimmed element counts (was 30 dots + 14 stars) to keep this light on
+  // budget devices — fewer simultaneous CSS animations, same GPU-only
+  // transform/opacity approach, no blur/box-shadow animation.
+  const dots=useMemo(()=>Array.from({length:14},(_,i)=>({
+    x:8+((i*23)%84), y:8+((i*37)%84),
     dur:1.8+(i%5)*.3, delay:(i%7)*.22,
   })),[]);
-  const stars=useMemo(()=>Array.from({length:14},(_,i)=>({
-    x:12+((i*53)%76), y:12+((i*31)%76),
+  const stars=useMemo(()=>Array.from({length:7},(_,i)=>({
+    x:14+((i*53)%72), y:14+((i*31)%72),
     dur:1.2+(i%4)*.25, delay:(i%6)*.3,
   })),[]);
 
@@ -561,6 +792,13 @@ function SplashScreen({onDone}){
         @keyframes _spScan   {0%{transform:translateY(-130px);opacity:0}10%{opacity:.5}90%{opacity:.5}100%{transform:translateY(130px);opacity:0}}
         @keyframes _spCorner {from{opacity:0;transform:scale(.8)}to{opacity:1;transform:scale(1)}}
         @keyframes _spText   {0%,100%{opacity:.5}50%{opacity:1}}
+        @keyframes _spShimmer{0%{background-position:-120px 0}100%{background-position:120px 0}}
+        @keyframes _spBarGlow{0%,100%{opacity:.5}50%{opacity:1}}
+        @keyframes _spSpin   {from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        @keyframes _spSpinRev{from{transform:rotate(360deg)}to{transform:rotate(0deg)}}
+        @keyframes _spRadar  {from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        @keyframes _spLetter {from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes _spPulse2 {0%,100%{opacity:.15;transform:scale(1)}50%{opacity:.4;transform:scale(1.18)}}
       `}</style>
 
       {/* faint drifting dots — transform+opacity only, no shadows/filters */}
@@ -582,6 +820,17 @@ function SplashScreen({onDone}){
         background:"radial-gradient(circle,#e21c1a22 0%,transparent 65%)",
         animation:"_spPulse 2.6s ease-in-out infinite",willChange:"transform,opacity"}}/>
 
+      {/* second, larger, slower pulse for depth */}
+      <div style={{position:"absolute",width:320,height:320,borderRadius:"50%",
+        background:"radial-gradient(circle,#e21c1a14 0%,transparent 60%)",
+        animation:"_spPulse2 4.2s ease-in-out infinite",willChange:"transform,opacity"}}/>
+
+      {/* radar sweep line, rotating around the logo */}
+      <div style={{position:"absolute",width:180,height:180,animation:"_spRadar 3s linear infinite",willChange:"transform"}}>
+        <div style={{position:"absolute",top:"50%",left:"50%",width:90,height:1,
+          background:"linear-gradient(90deg,#e21c1a99,transparent)",transformOrigin:"0 0"}}/>
+      </div>
+
       {/* vertical scan sweep through the logo zone — translateY+opacity, composited */}
       <div style={{position:"absolute",width:170,height:2,background:"linear-gradient(90deg,transparent,#e21c1a55,transparent)",
         animation:"_spScan 2.4s ease-in-out infinite",willChange:"transform,opacity"}}/>
@@ -600,17 +849,38 @@ function SplashScreen({onDone}){
       </div>
 
       <div style={{marginTop:16,fontSize:12,letterSpacing:3,color:"#e21c1ad0",textTransform:"uppercase",fontWeight:700,
-        opacity:s>=1?1:0,animation:s===1?"_spFade .5s ease .15s both":"none"}}>Journey to Strength</div>
+        opacity:s>=1?1:0,display:"flex"}}>
+        {"Journey to Strength".split("").map((ch,i)=>(
+          <span key={i} style={{display:"inline-block",opacity:s>=1?1:0,
+            animation:s===1?`_spLetter .35s ease ${.2+i*.02}s both`:"none",
+            whiteSpace:ch===" "?"pre":"normal"}}>{ch}</span>
+        ))}
+      </div>
 
       <div style={{position:"absolute",bottom:64,left:"14%",right:"14%"}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
           <span style={{fontSize:7.5,color:"#e21c1a99",letterSpacing:2,fontFamily:"monospace",animation:"_spText 1.4s ease-in-out infinite"}}>LOADING</span>
-          <span style={{fontSize:8,color:"#e21c1acc",fontFamily:"monospace",fontWeight:700}}>{pgPct}%</span>
+          <span style={{fontSize:8,color:"#e21c1acc",fontFamily:"monospace",fontWeight:700}}>{Math.min(100,Math.round(pgPct))}%</span>
         </div>
-        <div style={{height:4,background:"#0d0000",borderRadius:3,overflow:"hidden",border:"1px solid #e21c1a22"}}>
-          <div style={{height:"100%",borderRadius:3,background:"#e21c1a",
-            width:`${pgPct}%`,transition:"width .15s linear"}}/>
+        <div style={{position:"relative",height:6,background:"#0d0000",borderRadius:3,overflow:"hidden",border:"1px solid #e21c1a22"}}>
+          {/* filled portion */}
+          <div style={{height:"100%",borderRadius:3,background:"linear-gradient(90deg,#a01310,#e21c1a)",
+            width:`${pgPct}%`,transition:"width .12s linear",position:"relative",overflow:"hidden"}}>
+            {/* shimmer sweep — background-position only, no repaint of layout */}
+            <div style={{position:"absolute",inset:0,
+              background:"linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent)",
+              backgroundSize:"60px 100%",backgroundRepeat:"no-repeat",
+              animation:"_spShimmer 1.1s linear infinite",willChange:"background-position"}}/>
+          </div>
+          {/* faint tick marks for a segmented, mechanical feel */}
+          <div style={{position:"absolute",inset:0,display:"flex",pointerEvents:"none"}}>
+            {Array.from({length:9},(_,i)=><div key={i} style={{flex:1,borderRight:i<8?"1px solid rgba(0,0,0,.35)":"none"}}/>)}
+          </div>
         </div>
+        {/* leading edge glow dot, tracks the bar's progress */}
+        <div style={{position:"absolute",top:22,left:`${pgPct}%`,width:4,height:4,borderRadius:"50%",
+          background:"#ff5b52",transform:"translateX(-50%)",
+          animation:"_spBarGlow 1s ease-in-out infinite",willChange:"opacity"}}/>
       </div>
     </div>
   );
@@ -832,25 +1102,35 @@ function DigitalClock({mode,onToggle}){
   );
 }
 
-function RecoveryBar({label,icon,color,days}){
+function RecoveryBar({label,color,days,index=0}){
   const maxDays=8;
   const pct=days==null?100:Math.min(100,(days/maxDays)*100);
   const text=days==null?"Never trained":days===0?"Today":days===1?"1 day ago":`${days} days ago`;
-  const fresh=days!=null&&days<=2;
+  // "Ready" = enough recovery time has passed (muscle groups typically need
+  // ~48-72h) — NOT recently trained. days===null (never trained) counts as ready too.
+  const ready=days==null||days>=3;
+  const justTrained=days!=null&&days<=1;
   return(
     <div style={{marginBottom:13,animation:"_appFadeIn .5s ease both"}}>
       <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:5,alignItems:"center"}}>
-        <span style={{color,textShadow:`0 0 8px ${color}99`,fontWeight:fresh?700:400,display:"flex",alignItems:"center",gap:5}}>
-          {icon} {label}
-          {fresh&&<span style={{fontSize:8,background:color+"22",border:`1px solid ${color}44`,borderRadius:3,padding:"1px 5px",letterSpacing:1,fontFamily:"monospace"}}>READY</span>}
+        <span style={{color,textShadow:`0 0 8px ${color}99`,fontWeight:ready?700:400,display:"flex",alignItems:"center",gap:6}}>
+          <IconBox color={color} size={16}/> {label}
+          {ready&&<span style={{fontSize:8,background:`linear-gradient(135deg,${color}33,${color}18)`,border:`1px solid ${color}55`,
+            borderRadius:3,padding:"1px 5px",letterSpacing:1,fontFamily:"monospace",boxShadow:`0 0 5px ${color}44`}}>READY</span>}
+          {justTrained&&!ready&&<span style={{fontSize:8,background:C.surfaceHi,border:`1px solid ${C.border}`,color:C.textLow,
+            borderRadius:3,padding:"1px 5px",letterSpacing:1,fontFamily:"monospace"}}>RECOVERING</span>}
         </span>
         <span style={{fontSize:10,color:days===0?color:C.textMid,fontFamily:"monospace"}}>{text}</span>
       </div>
-      <div style={{height:8,background:C.surfaceHi,borderRadius:5,overflow:"hidden",border:`1px solid ${color}22`,position:"relative"}}>
+      {/* FX5: bar grows in from zero width, staggered by index, on first mount. Remove the outer wrapper's animation (search "FX5") to disable. */}
+      <div style={{height:9,background:`linear-gradient(180deg,${C.surfaceHi},${C.surfaceHi}cc)`,borderRadius:5,overflow:"hidden",
+        border:`1px solid ${color}28`,position:"relative",transformOrigin:"left center",
+        boxShadow:`inset 0 1px 3px rgba(0,0,0,.25)`,
+        animation:`_fx5FillIn .5s cubic-bezier(.22,1,.36,1) ${index*.08}s both`}}>
         <div style={{height:"100%",width:`${pct}%`,
-          background:`linear-gradient(90deg,${color}77,${color},${color}cc)`,
-          borderRadius:5,transition:"width 0.7s cubic-bezier(.22,1,.36,1)",
-          boxShadow:`0 0 12px ${color}99, 0 0 24px ${color}44`}}/>
+          background:`linear-gradient(90deg,${color}77,${color},${color}dd)`,
+          borderRadius:5,transition:"width 0.7s cubic-bezier(.22,1,.36,1)",position:"relative",
+          boxShadow:`0 0 12px ${color}99, 0 0 24px ${color}44, inset 0 1px 1px rgba(255,255,255,.35), inset 0 -2px 3px ${color}66`}}/>
         {/* shimmer sweep across fill */}
         {pct>0&&<div style={{position:"absolute",top:0,left:0,height:"100%",width:`${pct}%`,
           background:"linear-gradient(90deg,transparent 20%,rgba(255,255,255,.22) 50%,transparent 80%)",
@@ -858,7 +1138,8 @@ function RecoveryBar({label,icon,color,days}){
       </div>
       <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
         {[0,25,50,75,100].map(v=>(
-          <div key={v} style={{width:1,height:3,background:pct>=v?color+99:C.border,transition:"background .4s"}}/>
+          <div key={v} style={{width:1,height:3,background:pct>=v?color+99:C.border,transition:"background .4s",
+            boxShadow:pct>=v?`0 0 3px ${color}88`:"none"}}/>
         ))}
       </div>
     </div>
@@ -902,6 +1183,13 @@ function Heatmap({log,themeMode}){
     const pick = priority.find(p=>sessIds.includes(p)) ?? sessIds[0];
     return SESSIONS.find(s=>s.id===pick)?.color ?? C.gold;
   };
+  // All distinct session colors logged on a day, in priority order — used to
+  // blink between colors when two sessions overlap on the same date.
+  const colorsFor = sessIds => {
+    const ordered = priority.filter(p=>sessIds.includes(p)).concat(sessIds.filter(s=>!priority.includes(s)));
+    const cols = ordered.map(id=>SESSIONS.find(s=>s.id===id)?.color).filter(Boolean);
+    return [...new Set(cols)];
+  };
 
   // month label above the column where that month first starts
   let lastMonth=-1;
@@ -916,9 +1204,33 @@ function Heatmap({log,themeMode}){
     if(scrollRef.current) scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
   },[]);
 
+  // Current streak: consecutive days up to today with any logged training or mobility.
+  let streak = 0;
+  for(let i=dayCells.length-1;i>=0;i--){
+    const d = dayCells[i];
+    if(d.sessIds.length || d.mobility) streak++;
+    else break;
+  }
+  const DOW = ["S","M","T","W","T","F","S"];
+
   return (
     <div>
-      <div ref={scrollRef} style={{overflowX:"auto",paddingBottom:6,WebkitOverflowScrolling:"touch"}}>
+      <style>{`@keyframes _hmBlink{0%,22%{background:var(--c1)}25%,47%{background:var(--c2)}50%,72%{background:var(--c3)}75%,97%{background:var(--c4)}100%{background:var(--c1)}}
+@keyframes _hmFlamePulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.12);opacity:.85}}`}</style>
+      {streak>0&&<div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8,padding:"5px 10px",
+        background:`linear-gradient(135deg,${C.gold}18,transparent)`,border:`1px solid ${C.gold}40`,
+        borderRadius:8,width:"fit-content",boxShadow:`0 0 10px ${C.gold}22`}}>
+        <span style={{fontSize:13,display:"inline-block",animation:"_hmFlamePulse 1.6s ease-in-out infinite"}}>🔥</span>
+        <span style={{fontSize:11,color:C.gold,fontWeight:700,textShadow:`0 0 6px ${C.gold}66`}}>{streak}-day streak</span>
+      </div>}
+      <div style={{display:"flex",gap:6}}>
+        <div style={{display:"flex",flexDirection:"column",gap:3,marginTop:14,marginRight:1}}>
+          {DOW.map((d,i)=>(
+            <div key={i} style={{width:9,height:11,fontSize:6,color:C.textLow,fontFamily:"monospace",
+              display:"flex",alignItems:"center",opacity:i%2?1:.55}}>{d}</div>
+          ))}
+        </div>
+        <div ref={scrollRef} style={{overflowX:"auto",paddingBottom:6,WebkitOverflowScrolling:"touch"}}>
         <div style={{display:"inline-block"}}>
           <div style={{display:"flex",gap:3,marginBottom:3}}>
             {cols.map((c,i)=>(
@@ -931,31 +1243,54 @@ function Heatmap({log,themeMode}){
                 {Array.from({length:7}).map((_,ri)=>{
                   const cell = colArr.find(d=>d.dow===ri);
                   if(!cell) return <div key={ri} style={{width:11,height:11}}/>;
+                  const multiColors = colorsFor(cell.sessIds);
                   const col2 = colorFor(cell.sessIds);
                   const cellColor = col2 ?? (cell.mobility ? MOBILITY_COLOR : null);
                   const isToday = cell.date===todayStr();
+                  const isOverlap = multiColors.length>1;
+                  // Fill 4 CSS-var slots by cycling through the distinct colors logged
+                  // that day, so 2, 3, or 4+ overlapping sessions all blink in turn.
+                  const blinkSlots = isOverlap ? Array.from({length:4},(_,i)=>multiColors[i%multiColors.length]+"d0") : null;
                   return <div key={ri} title={`${cell.date}${cell.sessIds.length?` · ${cell.sessIds.join(", ")}`:""}${cell.mobility?` · Mobility`:""}`}
-                    style={{width:11,height:11,borderRadius:2,
-                      background: cellColor ? cellColor+"d0" : C.surfaceHi,
+                    style={{width:11,height:11,borderRadius:3,position:"relative",cursor:"default",
+                      ...(isOverlap
+                        ? {"--c1":blinkSlots[0],"--c2":blinkSlots[1],"--c3":blinkSlots[2],"--c4":blinkSlots[3],animation:`_hmBlink ${0.7*multiColors.length}s steps(1) infinite`}
+                        : {background: cellColor
+                            ? `radial-gradient(circle at 32% 28%,${cellColor}ff 0%,${cellColor}d0 55%,${cellColor}a0 100%)`
+                            : `radial-gradient(circle at 32% 28%,${C.surfaceHi} 0%,${C.surfaceHi}dd 100%)`}),
                       border: isToday ? `1.5px solid ${C.gold}` : cell.mobility&&col2 ? `1px solid ${MOBILITY_COLOR}` : `1px solid ${C.border}`,
-                      boxShadow: isToday ? `0 0 6px ${C.gold}88` : cellColor ? `0 0 4px ${cellColor}66` : "none",
+                      boxShadow: isToday
+                        ? `0 0 8px 1px ${C.gold}aa, inset 0 0 3px ${C.gold}66, inset 0 1px 1px rgba(255,255,255,.35)`
+                        : isOverlap
+                          ? `0 0 6px 1px ${multiColors[0]}aa, inset 0 1px 1px rgba(255,255,255,.25)`
+                          : cellColor
+                            ? `0 0 5px 0.5px ${cellColor}88, inset 0 1px 1px rgba(255,255,255,.3), inset 0 -2px 3px ${cellColor}55`
+                            : "inset 0 1px 2px rgba(0,0,0,.15)",
                       boxSizing:"border-box",
-                      animation: isToday ? "_inBeat 2.5s ease-in-out 2" : (cellColor?"_appFadeIn .3s ease both":"none")}}/>;
+                      transition:"transform .12s ease, box-shadow .12s ease",
+                      /* FX6: cells with logged data ripple in (scale+fade), staggered by column, on first render. Remove this animation line (search "FX6") to disable. */
+                      ...(isOverlap ? {} : {animation: isToday ? "_inBeat 2.5s ease-in-out 2" : (cellColor?`_fx6Ripple .3s ease ${Math.min(ci*.015,.6)}s both`:"none")})}}/>;
                 })}
               </div>
             ))}
           </div>
         </div>
+        </div>
       </div>
       <div style={{display:"flex",gap:12,marginTop:6,flexWrap:"wrap"}}>
         {SESSIONS.map(s=>(
           <div key={s.id} style={{display:"flex",alignItems:"center",gap:4}}>
-            <div style={{width:9,height:9,borderRadius:2,background:s.color+"d0"}}/>
+            <div style={{width:9,height:9,borderRadius:3,
+              background:`radial-gradient(circle at 32% 28%,${s.color}ff 0%,${s.color}d0 55%,${s.color}a0 100%)`,
+              boxShadow:`0 0 3px ${s.color}66, inset 0 1px 1px rgba(255,255,255,.3)`}}/>
             <span style={{fontSize:9,color:C.textLow}}>{s.label.split(" ")[0]}</span>
           </div>
         ))}
         <div style={{display:"flex",alignItems:"center",gap:4}}>
-          <div style={{width:9,height:9,borderRadius:2,background:MOBILITY_COLOR+"d0",border:`1px solid ${MOBILITY_COLOR}`}}/>
+          <div style={{width:9,height:9,borderRadius:3,
+            background:`radial-gradient(circle at 32% 28%,${MOBILITY_COLOR}ff 0%,${MOBILITY_COLOR}d0 55%,${MOBILITY_COLOR}a0 100%)`,
+            border:`1px solid ${MOBILITY_COLOR}`,
+            boxShadow:`0 0 3px ${MOBILITY_COLOR}44, inset 0 1px 1px rgba(255,255,255,.3)`}}/>
           <span style={{fontSize:9,color:C.textLow}}>Mobility</span>
         </div>
       </div>
@@ -966,11 +1301,40 @@ function Heatmap({log,themeMode}){
 function getLastWeight(log,sid,eid,beforeDate){ const e=Object.entries(log??{}).filter(([k,v])=>{const p=parseExKey(k);return p&&p.sessId===sid&&p.exId===eid&&typeof v==="number"&&!isNaN(v)&&v>0&&p.date<beforeDate;}).sort(([a],[b])=>a.localeCompare(b)); return e.length?e[e.length-1][1]:null; }
 function getAllWeights(log,sid,eid){ return Object.entries(log??{}).filter(([k,v])=>{const p=parseExKey(k);return p&&p.sessId===sid&&p.exId===eid&&typeof v==="number"&&!isNaN(v)&&v>0;}).sort(([a],[b])=>a.localeCompare(b)).map(([,v])=>v); }
 
-function ExRow({ex,accent,logKey,logVal,onLog,lastWeight}){
+// Parses an exercise's target sets field (e.g. "3", "3–4") into a usable set count for per-set logging.
+function parseSetCount(setsField){
+  const m=String(setsField??"3").match(/\d+/g);
+  if(!m||!m.length) return 3;
+  const n=parseInt(m[m.length-1],10);
+  return Math.min(8,Math.max(1,isNaN(n)?3:n));
+}
+
+function WeightInput({value,onChange,placeholder,accent,autoFocus}){
+  const [focused,setFocused]=useState(false);
+  // FX18: on focus, a brief outward ring pulse plays once (transform+opacity
+  // only, fires once per focus event via pulseKey — not on every keystroke).
+  // Search "FX18" to remove: delete pulseKey state, the onFocus increment,
+  // and the pulse span below.
+  const [pulseKey,setPulseKey]=useState(0);
+  return <div style={{position:"relative",width:"100%"}}>
+    <input autoFocus={autoFocus} value={value} onChange={onChange}
+      onFocus={()=>{setFocused(true);setPulseKey(k=>k+1);}} onBlur={()=>setFocused(false)}
+      type="number" inputMode="decimal" placeholder={placeholder}
+      style={{width:"100%",background:focused?C.surfaceHi:C.surfaceHi,border:`1.5px solid ${focused?accent:accent+"66"}`,borderRadius:6,color:C.text,fontSize:13,fontWeight:600,padding:"6px 28px 6px 8px",textAlign:"center",outline:"none",boxSizing:"border-box",boxShadow:focused?`0 0 0 3px ${accent}22, 0 0 10px ${accent}55`:"none",transition:"box-shadow .15s, border-color .15s"}}/>
+    <span style={{position:"absolute",right:7,top:"50%",transform:"translateY(-50%)",fontSize:9,color:accent+"aa",fontFamily:"monospace",pointerEvents:"none",fontWeight:700}}>kg</span>
+    {pulseKey>0&&<span key={pulseKey} style={{position:"absolute",inset:0,borderRadius:6,border:`1.5px solid ${accent}`,
+      pointerEvents:"none",animation:"_fx18FocusPulse .4s ease-out"}}/>}
+  </div>;
+}
+
+function ExRow({ex,accent,logKey,logVal,onLog,lastWeight,setRepsVal,onLogSetReps,plateau}){
   const [open,setOpen]=useState(false);
   const [editing,setEditing]=useState(false);
   const [inp,setInp]=useState("");
+  const setCount=parseSetCount(ex.sets);
+  const [perSetInp,setPerSetInp]=useState(()=>Array(setCount).fill(""));
   const done=logVal!==undefined&&logVal!==null;
+  const unit=ex.logMode==="reps"?"reps":"kg";
   return <div style={{background:C.surfaceHi,border:`1.5px solid ${open?accent+"77":done?accent+"33":C.border}`,borderRadius:10,marginBottom:8,overflow:"hidden",boxShadow:open?`0 0 12px ${accent}22`:done?`0 0 6px ${accent}18`:"none",transition:"border-color .2s,box-shadow .2s",willChange:"auto"}}>
     <div style={{display:"grid",gridTemplateColumns:"1fr 44px 66px 80px",gap:6,padding:"10px 12px",alignItems:"center",cursor:"pointer"}} onClick={()=>setOpen(o=>!o)}>
       <div>
@@ -979,6 +1343,7 @@ function ExRow({ex,accent,logKey,logVal,onLog,lastWeight}){
           {done&&<span style={{fontSize:9,color:accent,background:accent+"22",border:`1px solid ${accent}55`,borderRadius:4,padding:"1px 5px",fontFamily:"monospace",letterSpacing:.5,
             boxShadow:`0 0 8px ${accent}66`,
             animation:"_inTickIn .4s cubic-bezier(.22,1.8,.4,1) both"}}>✓</span>}
+          {plateau&&<span title="No progress in 3+ sessions" style={{fontSize:9,color:C.warn,background:C.warn+"22",border:`1px solid ${C.warn}55`,borderRadius:4,padding:"1px 5px"}}>⚠</span>}
         </div>
         <div style={{fontSize:9,color:C.textLow,marginTop:2}}>
           {ex.sets} sets · {ex.reps}
@@ -990,7 +1355,37 @@ function ExRow({ex,accent,logKey,logVal,onLog,lastWeight}){
       <div style={{textAlign:"center"}}><div style={{fontSize:7,color:C.textLow,marginBottom:2,letterSpacing:1,fontFamily:"monospace"}}>SETS</div><div style={{fontSize:18,color:accent,fontWeight:700,lineHeight:1,textShadow:`0 0 8px ${accent}66`}}>{ex.sets}</div></div>
       <div style={{textAlign:"center"}}><div style={{fontSize:7,color:C.textLow,marginBottom:2,letterSpacing:1,fontFamily:"monospace"}}>REPS</div><div style={{fontSize:11,color:C.textMid}}>{ex.reps}</div></div>
       <div style={{textAlign:"center"}} onClick={e=>e.stopPropagation()}>
-        {ex.weighted?(editing?<div style={{display:"flex",flexDirection:"column",gap:3}}><input autoFocus value={inp} onChange={e=>setInp(e.target.value)} type="number" placeholder={lastWeight?`${lastWeight}kg`:"kg"} style={{width:"100%",background:C.surfaceHi,border:`1px solid ${accent}`,borderRadius:4,color:C.text,fontSize:12,padding:"4px 5px",textAlign:"center",outline:"none",boxSizing:"border-box"}}/><div style={{display:"flex",gap:3}}><button onClick={()=>{const n=parseFloat(inp);if(inp!==""&&!isNaN(n)&&n>0)onLog(logKey,n);setEditing(false);}} style={{flex:1,background:accent,border:"none",borderRadius:3,color:"#fff",fontSize:10,padding:"3px 0",cursor:"pointer"}}>✓</button><button onClick={()=>setEditing(false)} style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:3,color:C.textMid,fontSize:10,padding:"3px 0",cursor:"pointer"}}>✕</button></div></div>:<button onClick={()=>{setEditing(true);setInp(done?String(logVal):"");}} style={{background:done?accent+"22":C.card,border:`1px solid ${done?accent:C.borderHi}`,borderRadius:6,color:done?accent:C.textMid,fontSize:11,padding:"6px 4px",cursor:"pointer",width:"100%",fontFamily:"Georgia,serif"}}>{done?`${logVal} kg`:"Enter kg"}</button>):<button onClick={()=>onLog(logKey,done?null:true)} style={{background:done?C.ok+"22":C.card,border:`1px solid ${done?C.ok:C.borderHi}`,borderRadius:6,color:done?C.ok:C.textMid,fontSize:11,padding:"6px 4px",cursor:"pointer",width:"100%",fontFamily:"Georgia,serif"}}>{done?"✓ Done":"Mark done"}</button>}
+        {ex.logMode==="reps_weight"?(editing?
+          <div style={{display:"flex",flexDirection:"column",gap:3,minWidth:90}}>
+            {perSetInp.map((v,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:3}}>
+                <span style={{fontSize:8,color:C.textLow,width:16,flexShrink:0}}>S{i+1}</span>
+                <input autoFocus={i===0} value={v} onChange={e=>setPerSetInp(a=>a.map((x,j)=>j===i?e.target.value:x))} type="number" placeholder={setRepsVal?.[i]!=null?`${setRepsVal[i]} reps`:"reps"} style={{width:"100%",background:C.surfaceHi,border:`1px solid ${accent}`,borderRadius:4,color:C.text,fontSize:11,padding:"3px 4px",textAlign:"center",outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            ))}
+            <WeightInput value={inp} onChange={e=>setInp(e.target.value)} placeholder={lastWeight?`${lastWeight}`:"+wt"} accent={accent}/>
+            <div style={{display:"flex",gap:3}}>
+              <button onClick={()=>{const arr=perSetInp.map(x=>{const n=parseFloat(x);return isNaN(n)||n<=0?null:n;}).filter(x=>x!=null);const w=parseFloat(inp);if(arr.length)onLogSetReps(arr);if(inp!==""&&!isNaN(w)&&w>0)onLog(logKey,w);setEditing(false);}} style={{flex:1,background:accent,border:"none",borderRadius:3,color:"#fff",fontSize:10,padding:"3px 0",cursor:"pointer"}}>✓</button>
+              {done&&<button onClick={()=>{onLog(logKey,null);setInp("");setEditing(false);}} title="Remove logged weight" style={{flex:1,background:"none",border:`1px solid ${C.warn}66`,borderRadius:3,color:C.warn,fontSize:10,padding:"3px 0",cursor:"pointer"}}>Clear</button>}
+              <button onClick={()=>setEditing(false)} style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:3,color:C.textMid,fontSize:10,padding:"3px 0",cursor:"pointer"}}>✕</button>
+            </div>
+          </div>
+          :<button onClick={()=>{setEditing(true);setInp(done?String(logVal):"");setPerSetInp(Array.from({length:setCount},(_,i)=>setRepsVal?.[i]!=null?String(setRepsVal[i]):""));}} style={{background:done?accent+"18":C.card,border:`1px solid ${done?accent+"88":C.borderHi}`,borderRadius:6,color:done?accent:C.textMid,fontSize:11,padding:"6px 4px",cursor:"pointer",width:"100%",fontFamily:"Georgia,serif",boxShadow:done?`0 0 8px ${accent}33`:"none"}}>{done&&setRepsVal?.length?<>{setRepsVal.join("/")}<span style={{opacity:.6}}>×</span><b>{logVal}</b><span style={{fontSize:9,opacity:.75}}>kg</span></>:done?<><b>{logVal}</b><span style={{fontSize:9,opacity:.75}}> kg</span></>:"Enter"}</button>)
+        :ex.logMode==="reps"?(editing?
+          <div style={{display:"flex",flexDirection:"column",gap:3,minWidth:90}}>
+            {perSetInp.map((v,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:3}}>
+                <span style={{fontSize:8,color:C.textLow,width:16,flexShrink:0}}>S{i+1}</span>
+                <input autoFocus={i===0} value={v} onChange={e=>setPerSetInp(a=>a.map((x,j)=>j===i?e.target.value:x))} type="number" placeholder={setRepsVal?.[i]!=null?`${setRepsVal[i]} reps`:"reps"} style={{width:"100%",background:C.surfaceHi,border:`1px solid ${accent}`,borderRadius:4,color:C.text,fontSize:11,padding:"3px 4px",textAlign:"center",outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:3}}>
+              <button onClick={()=>{const arr=perSetInp.map(x=>{const n=parseFloat(x);return isNaN(n)||n<=0?null:n;}).filter(x=>x!=null);if(arr.length)onLogSetReps(arr);setEditing(false);}} style={{flex:1,background:accent,border:"none",borderRadius:3,color:"#fff",fontSize:10,padding:"3px 0",cursor:"pointer"}}>✓</button>
+              <button onClick={()=>setEditing(false)} style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:3,color:C.textMid,fontSize:10,padding:"3px 0",cursor:"pointer"}}>✕</button>
+            </div>
+          </div>
+          :<button onClick={()=>{setEditing(true);setPerSetInp(Array.from({length:setCount},(_,i)=>setRepsVal?.[i]!=null?String(setRepsVal[i]):""));}} style={{background:done?accent+"22":C.card,border:`1px solid ${done?accent:C.borderHi}`,borderRadius:6,color:done?accent:C.textMid,fontSize:11,padding:"6px 4px",cursor:"pointer",width:"100%",fontFamily:"Georgia,serif"}}>{done&&setRepsVal?.length?setRepsVal.join("/"):"Enter reps"}</button>)
+        :ex.weighted?(editing?<div style={{display:"flex",flexDirection:"column",gap:3}}><WeightInput autoFocus value={inp} onChange={e=>setInp(e.target.value)} placeholder={lastWeight?`${lastWeight}`:"kg"} accent={accent}/><div style={{display:"flex",gap:3}}><button onClick={()=>{const n=parseFloat(inp);if(inp!==""&&!isNaN(n)&&n>0)onLog(logKey,n);setEditing(false);}} style={{flex:1,background:accent,border:"none",borderRadius:3,color:"#fff",fontSize:10,padding:"3px 0",cursor:"pointer"}}>✓</button>{done&&<button onClick={()=>{onLog(logKey,null);setInp("");setEditing(false);}} title="Remove logged weight" style={{flex:1,background:"none",border:`1px solid ${C.warn}66`,borderRadius:3,color:C.warn,fontSize:10,padding:"3px 0",cursor:"pointer"}}>Clear</button>}<button onClick={()=>setEditing(false)} style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:3,color:C.textMid,fontSize:10,padding:"3px 0",cursor:"pointer"}}>✕</button></div></div>:<button onClick={()=>{setEditing(true);setInp(done?String(logVal):"");}} style={{background:done?accent+"18":C.card,border:`1px solid ${done?accent+"88":C.borderHi}`,borderRadius:6,color:done?accent:C.textMid,fontSize:11,padding:"6px 4px",cursor:"pointer",width:"100%",fontFamily:"Georgia,serif",boxShadow:done?`0 0 8px ${accent}33`:"none"}}>{done?<><b>{logVal}</b><span style={{fontSize:9,opacity:.75}}> kg</span></>:"Enter kg"}</button>):<button onClick={()=>onLog(logKey,done?null:true)} style={{background:done?C.ok+"22":C.card,border:`1px solid ${done?C.ok:C.borderHi}`,borderRadius:6,color:done?C.ok:C.textMid,fontSize:11,padding:"6px 4px",cursor:"pointer",width:"100%",fontFamily:"Georgia,serif"}}>{done?"✓ Done":"Mark done"}</button>}
       </div>
     </div>
     {open&&<div style={{borderTop:`1px solid ${accent}33`,padding:"10px 14px 14px",background:accent+"08",position:"relative",animation:"_inSlideUp .25s ease both"}}>
@@ -998,17 +1393,28 @@ function ExRow({ex,accent,logKey,logVal,onLog,lastWeight}){
         background:`linear-gradient(180deg,${accent},${accent}55)`,borderRadius:"0 2px 2px 0",
         boxShadow:`2px 0 8px ${accent}44`,
         animation:"_inGlowPulse 2.5s ease-in-out 2"}}/>
-      {lastWeight&&<div style={{marginBottom:8,fontSize:11,color:C.textMid}}>Last session: <span style={{color:accent,fontWeight:700}}>{lastWeight} kg</span>{done&&logVal>lastWeight&&<span style={{color:C.ok,marginLeft:6,display:"inline-flex",alignItems:"center",gap:3,
+      {lastWeight&&<div style={{marginBottom:8,fontSize:11,color:C.textMid}}>Last session: <span style={{color:accent,fontWeight:700}}>{lastWeight} kg</span>{done&&ex.logMode!=="reps"&&logVal>lastWeight&&
+        // FX1: PR celebration — badge + a few small spark dots that burst outward once, then fade. Purely transform/opacity, one-shot (no infinite loop). Remove this <span style={{position:"relative"...}}>...</span> block (and the _fx1Spark keyframes below) to disable.
+        <span style={{color:C.ok,marginLeft:6,display:"inline-flex",alignItems:"center",gap:3,position:"relative",
   background:C.ok+"18",border:`1px solid ${C.ok}44`,borderRadius:4,padding:"1px 7px",
-  boxShadow:`0 0 10px ${C.ok}55`,animation:"_inPrBadge .5s cubic-bezier(.22,1.8,.4,1) both"}}>▲ +{(logVal-lastWeight).toFixed(1)} kg PR</span>}</div>}
+  boxShadow:`0 0 10px ${C.ok}55`,animation:"_inPrBadge .5s cubic-bezier(.22,1.8,.4,1) both"}}>▲ +{(logVal-lastWeight).toFixed(1)} kg PR
+        {[0,1,2,3,4,5].map(i=>{
+          const ang=(i/6)*360;
+          return <span key={i} style={{position:"absolute",left:"50%",top:"50%",width:3,height:3,borderRadius:"50%",
+            background:i%2?C.gold:C.ok,pointerEvents:"none",
+            "--fx1ang":`${ang}deg`,
+            animation:`_fx1Spark .6s ease-out ${.05*i}s both`}}/>;
+        })}
+        </span>}</div>}
       {ex.tempo&&<div style={{fontSize:11,color:accent,marginBottom:6}}>Tempo: <b>{ex.tempo}</b></div>}
       {ex.focus&&<div style={{fontSize:11,color:C.textMid,lineHeight:1.65,marginBottom:6}}>{ex.focus}</div>}
+      {plateau&&<div style={{background:C.warn+"14",border:`1px solid ${C.warn}44`,borderRadius:5,padding:"6px 10px",fontSize:11,color:C.warn,marginBottom:6,display:"flex",alignItems:"center",gap:6}}>⚠ No progress in 3+ sessions — consider a deload or form check</div>}
       {ex.warn&&<div style={{background:C.warn+"0e",border:`1px solid ${C.warn}28`,borderRadius:5,padding:"6px 10px",fontSize:11,color:C.warn+"cc",marginBottom:6}}>⚠ {ex.warn}</div>}
     </div>}
   </div>;
 }
 
-function Graph({exId,sessId,exName,accent,log}){
+function Graph({exId,sessId,exName,accent,log,unit="kg"}){
   const [view,setView]=useState("all");
   const [chartType,setChartType]=useState("line"); // "line" | "bar"
   const [hovIdx,setHovIdx]=useState(null);
@@ -1024,7 +1430,7 @@ function Graph({exId,sessId,exName,accent,log}){
     <div style={{padding:`${SP.xl}px ${SP.md}px`,textAlign:"center"}}>
       <div style={{fontSize:32,marginBottom:SP.sm}}>📈</div>
       <div style={{fontSize:12,color:C.textLow}}>No data yet for {exName}</div>
-      <div style={{fontSize:10,color:C.textLow,marginTop:4}}>Log a weight to start tracking</div>
+      <div style={{fontSize:10,color:C.textLow,marginTop:4}}>Log {unit==="reps"?"a rep count":"a weight"} to start tracking</div>
     </div>
   );
 
@@ -1044,7 +1450,7 @@ function Graph({exId,sessId,exName,accent,log}){
         <div style={{fontSize:12,color:C.text,fontWeight:700}}>{exName}</div><Tabs/>
       </div>
       <div style={{textAlign:"center",padding:`${SP.md}px 0`}}>
-        <div style={{fontSize:36,color:accent,fontWeight:700,textShadow:`0 0 20px ${accent}66`}}>{entries[0]?.val??0}<span style={{fontSize:14,color:C.textMid,marginLeft:4}}>kg</span></div>
+        <div style={{fontSize:36,color:accent,fontWeight:700,textShadow:`0 0 20px ${accent}66`}}>{entries[0]?.val??0}<span style={{fontSize:14,color:C.textMid,marginLeft:4}}>{unit}</span></div>
         <div style={{fontSize:10,color:C.textLow,marginTop:4}}>1 session logged — keep going!</div>
       </div>
     </div>
@@ -1097,7 +1503,7 @@ function Graph({exId,sessId,exName,accent,log}){
         <div>
           <div style={{fontSize:13,color:C.text,fontWeight:700}}>{exName}</div>
           <div style={{display:"flex",alignItems:"center",gap:6,marginTop:3}}>
-            <span style={{fontSize:10,color:trendUp?C.ok:C.warn}}>{trendUp?"▲":"▼"} {Math.abs(slope).toFixed(2)} kg/session</span>
+            <span style={{fontSize:10,color:trendUp?C.ok:C.warn}}>{trendUp?"▲":"▼"} {Math.abs(slope).toFixed(2)} {unit}/session</span>
             <span style={{fontSize:9,color:C.textLow}}>trend</span>
           </div>
         </div>
@@ -1209,8 +1615,10 @@ function Graph({exId,sessId,exName,accent,log}){
           {/* LINE chart: area + curve */}
           {chartType==="line"&&<>
             <path d={areaD} fill={`url(#ga_${exId})`} clipPath={`url(#clip_${exId})`}/>
+            {/* FX10: line draws itself in once on mount via stroke-dashoffset (fixed dash length safely exceeds any real path). */}
             <path d={pathD} fill="none" stroke={accent} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"
-              filter={`url(#glow_${exId})`} clipPath={`url(#clip_${exId})`}/>
+              filter={`url(#glow_${exId})`} clipPath={`url(#clip_${exId})`}
+              style={{strokeDasharray:2000,strokeDashoffset:2000,animation:"_fx10Draw .7s ease forwards"}}/>
           </>}
 
           {/* Hover vertical guide */}
@@ -1261,7 +1669,7 @@ function Graph({exId,sessId,exName,accent,log}){
                 <rect x={bx} y={by} width={boxW} height={boxH} rx="6"
                   fill={C.card} stroke={isPR?"#ffd700":accent} strokeWidth="1.5" opacity="0.97"/>
                 <text x={bx+boxW/2} y={by+13} textAnchor="middle" fontSize="13" fontWeight="bold"
-                  fill={isPR?"#ffd700":accent}>{hov.val} kg{isPR?" ★":""}</text>
+                  fill={isPR?"#ffd700":accent}>{hov.val} {unit}{isPR?" ★":""}</text>
                 <text x={bx+boxW/2} y={by+26} textAnchor="middle" fontSize="8" fill={C.textLow}>{hov.date?.slice(5)}</text>
               </g>
             );
@@ -1272,13 +1680,14 @@ function Graph({exId,sessId,exName,accent,log}){
       {/* Stats strip */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:5,marginTop:SP.sm}}>
         {[
-          {label:"LATEST",val:`${latest}kg`,color:accent,big:true},
-          {label:"PR",val:`${pr}kg`,color:"#ffd700",big:true},
-          {label:"AVG",val:`${avg}kg`,color:C.textMid,big:false},
-          {label:"GAIN",val:`${gained>=0?"+":""}${gained}kg`,color:gained>=0?C.ok:C.warn,big:false},
+          {label:"LATEST",val:`${latest}${unit}`,color:accent,big:true},
+          {label:"PR",val:`${pr}${unit}`,color:"#ffd700",big:true},
+          {label:"AVG",val:`${avg}${unit}`,color:C.textMid,big:false},
+          {label:"GAIN",val:`${gained>=0?"+":""}${gained}${unit}`,color:gained>=0?C.ok:C.warn,big:false},
           {label:"LOGS",val:all.length,color:C.textMid,big:false},
-        ].map(s=>(
-          <div key={s.label} style={{background:C.surfaceHi,border:`1px solid ${s.color}28`,borderRadius:7,padding:"6px 4px",textAlign:"center"}}>
+        ].map((s,si)=>(
+          // FX3: staggered fade/rise-in per tile when the exercise/data changes. Remove the animation line (search "FX3") to disable.
+          <div key={s.label} style={{background:C.surfaceHi,border:`1px solid ${s.color}28`,borderRadius:7,padding:"6px 4px",textAlign:"center",animation:`_fx3Flash .35s ease ${si*.05}s both`}}>
             <div style={{fontSize:s.big?14:12,color:s.color,fontWeight:700,lineHeight:1,textShadow:s.big?`0 0 10px ${s.color}66`:"none"}}>{s.val}</div>
             <div style={{fontSize:7,color:C.textLow,marginTop:2,letterSpacing:1}}>{s.label}</div>
           </div>
@@ -1295,11 +1704,13 @@ function Graph({exId,sessId,exName,accent,log}){
             <div style={{fontSize:9,color:C.textLow,flexShrink:0}}>Last 7d</div>
             <div style={{display:"flex",gap:3,flex:1}}>
               {last7.reverse().map((active2,i)=>(
+                // FX9: bars fill in top-down, staggered by index, on first mount.
                 <div key={i} style={{flex:1,height:6,borderRadius:3,background:active2?accent:C.surfaceHi,
-                  boxShadow:active2?`0 0 6px ${accent}88`:"none"}}/>
+                  boxShadow:active2?`0 0 6px ${accent}88`:"none",transformOrigin:"bottom",
+                  animation:`_fx9BarFill .3s ease ${i*.04}s both`}}/>
               ))}
             </div>
-            <div style={{fontSize:9,color:accent,flexShrink:0,fontFamily:"monospace"}}>{streak}/7</div>
+            <div style={{fontSize:9,color:accent,flexShrink:0,fontFamily:"monospace",animation:"_fx3Flash .3s ease .3s both"}}>{streak}/7</div>
           </div>
         );
       })()}
@@ -1324,7 +1735,7 @@ function CompletionSummary({sessId,date,log,onDone,exList}){
     <div style={{fontSize:9,color:sess.color,letterSpacing:5,marginBottom:SP.xs,fontFamily:"monospace",textShadow:`0 0 10px ${sess.color}`}}>WORKOUT COMPLETE</div>
     <div style={{fontSize:26,color:C.text,marginBottom:SP.xs}}>{sess.label}</div>
     <div style={{fontSize:11,color:C.textLow,marginBottom:SP.sm,fontFamily:"monospace"}}>{fmtDate(date)}</div>
-    <div style={{fontSize:14,color:sess.color,fontWeight:700,marginBottom:SP.xl,background:sess.color+"14",border:`1px solid ${sess.color}33`,borderRadius:8,padding:"6px 16px",fontFamily:"monospace"}}>{comp.done}/{comp.total} · {comp.pct}% complete</div>
+    <div style={{fontSize:14,color:sess.color,fontWeight:700,marginBottom:SP.xl,background:sess.color+"14",border:`1px solid ${sess.color}33`,borderRadius:8,padding:"6px 16px",fontFamily:"monospace"}}>{comp.done}/{comp.total} exercises</div>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:SP.sm,width:"100%",maxWidth:320,marginBottom:SP.xl}}>
       <StatCard label="Exercises" value={loggedW.length+doneBW.length} color={sess.color}/>
       <StatCard label="Sets" value={totalSets} color={C.gold}/>
@@ -1338,6 +1749,7 @@ function CompletionSummary({sessId,date,log,onDone,exList}){
   </div>;
 }
 
+const TAB_ORDER = ["main","warmup","cooldown"];
 function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSaveWarmup,onSaveCooldown,onBack}){
   const sess = SESSIONS.find(s=>s.id===sessId) ?? SESSIONS[0];
   const [tab,setTab]=useState("main"); // "main" | "warmup" | "cooldown"
@@ -1354,7 +1766,14 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
   const [cdRows,setCdRows] = useState(()=>(cooldownList||[]).map(x=>typeof x==="string"?{text:x}:{text:x.text||""}));
   const [emojiPickerIdx,setEmojiPickerIdx] = useState(null);
 
-  const EMOJI_OPTS = ["🏋","💪","🦵","⬇","↔","🎯","🔨","🤸","🧘","⚡","📐","🔼","🦅","🛡","🍑","🦀","🌉","🧳","💨","🏃","🦘","📦","🔄","↩","🔥","⬆","🤲","✊","🦶","🦾","🏔","🪜","⛓","🧗","🥊","🤾","🦴","🌀","➰","🪢","🎢","🪂","🦿","🧱","⚓","🪝","🔽","↗"];
+  const EMOJI_OPTS = [
+    "🏋","🏋‍♂","🏋‍♀","💪","🦾","🦵","🦿","🦶","🦶🏻","👣","🤲","✊","👊","🤜","🤛",
+    "⬇","⬆","↔","↕","↗","↩","🔄","🔽","🔼","➰","🪢","⛓","🌀",
+    "🎯","🔨","🤸","🤸‍♂","🤸‍♀","🧘","🧘‍♂","🧘‍♀","🤾","🤾‍♂","🥊","🧗","🧗‍♂","🧗‍♀","🤺",
+    "⚡","💨","🏃","🏃‍♂","🏃‍♀","🦘","🚴","🚴‍♂","🚴‍♀","🏊","🏊‍♂","🤽",
+    "📐","🔥","🍑","🦅","🛡","🦀","🌉","🧳","📦","🏔","🪜","🎢","🪂","🧱","⚓","🪝","🥋","🏅","🎽","🪣","🏹",
+  ];
+  const [emojiSearch,setEmojiSearch]=useState("");
 
   function patchRow(idx,patch){setRows(rs=>rs.map((r,i)=>i===idx?{...r,...patch}:r));}
   function deleteRow(idx){setRows(rs=>rs.filter((_,i)=>i!==idx));setEmojiPickerIdx(null);}
@@ -1407,20 +1826,22 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
           if(tab==="main") handleSave();
           else if(tab==="warmup"){onSaveWarmup&&onSaveWarmup(sessId,wuRows.map(r=>r.text||"").filter(Boolean));onBack();}
           else{onSaveCooldown&&onSaveCooldown(sessId,cdRows.map(r=>r.text||"").filter(Boolean));onBack();}
-        }} style={{position:"absolute",top:18,right:16,background:sess.color,border:"none",borderRadius:7,color:"#fff",fontSize:12,padding:"8px 14px",cursor:"pointer",fontFamily:"Georgia,serif"}}>Save</button>
+        }} style={{position:"absolute",top:18,right:16,background:sess.color,border:"none",borderRadius:7,color:"#fff",fontSize:12,padding:"8px 14px",cursor:"pointer",fontFamily:"Georgia,serif",boxShadow:`0 0 16px ${sess.color}55, 0 0 30px ${sess.color}22`,transition:"box-shadow .2s"}}>Save</button>
         <div style={{fontSize:9,color:sess.color,letterSpacing:3,marginBottom:3,fontFamily:"monospace"}}>EDIT WORKOUT</div>
-        <div style={{fontSize:20}}>{sess.icon} {sess.label}</div>
+        <div style={{fontSize:20,display:"flex",alignItems:"center",gap:8}}><span style={{width:12,height:12,borderRadius:"50%",background:sess.color,boxShadow:`0 0 6px ${sess.color}99`,display:"inline-block",flexShrink:0}}/>{sess.label}</div>
       </div>
 
       {/* Tabs */}
-      <div style={{display:"flex",borderBottom:`1px solid ${C.border}`}}>
-        {[["main","Main"],["warmup","Warm-Up"],["cooldown","Cool Down"]].map(([t,l])=>(
-          <button key={t} onClick={()=>setTab(t)} style={{flex:1,padding:"10px 4px",background:"none",
-            border:"none",borderBottom:`2px solid ${tab===t?sess.color:"transparent"}`,
-            color:tab===t?sess.color:C.textMid,fontSize:11,cursor:"pointer",fontFamily:"Georgia,serif"}}>
+      <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,position:"relative"}}>
+        {[["main","Main"],["warmup","🔥 Warm-Up"],["cooldown","🧊 Cool Down"]].map(([t,l])=>(
+          <button key={t} onClick={()=>setTab(t)} style={{flex:1,padding:"10px 4px",background:"none",position:"relative",
+            border:"none",color:tab===t?sess.color:C.textMid,fontSize:11,cursor:"pointer",fontFamily:"Georgia,serif"}}>
             {l}
           </button>
         ))}
+        {/* FX4: single underline bar that glides between tabs (translateX by index) instead of each tab fading in its own. Remove this span + TAB_ORDER to disable. */}
+        <span style={{position:"absolute",left:0,bottom:-1,height:2,width:`${100/3}%`,background:sess.color,
+          transform:`translateX(${TAB_ORDER.indexOf(tab)*100}%)`,transition:"transform .28s cubic-bezier(.4,0,.2,1)"}}/>
       </div>
 
       <div style={{padding:SP.md}}>
@@ -1435,13 +1856,25 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
                   <button onClick={()=>moveRow(i,1)} disabled={i===rows.length-1} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===rows.length-1?C.textLow:C.text,fontSize:10,cursor:i===rows.length-1?"default":"pointer",lineHeight:1,opacity:i===rows.length-1?.4:1}}>▼</button>
                 </div>
                 <div style={{position:"relative"}}>
-                  <button onClick={()=>setEmojiPickerIdx(emojiPickerIdx===i?null:i)}
+                  <button onClick={()=>{setEmojiPickerIdx(emojiPickerIdx===i?null:i);setEmojiSearch("");}}
                     style={{width:38,height:38,fontSize:20,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
                     {r.icon||"🏋"}
                   </button>
-                  {emojiPickerIdx===i&&<div style={{position:"absolute",top:42,left:0,zIndex:50,background:C.card,border:`1px solid ${C.borderHi}`,borderRadius:8,padding:6,display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:3,width:180}}>
-                    {EMOJI_OPTS.map(em=><button key={em} onClick={()=>{patchRow(i,{icon:em});setEmojiPickerIdx(null);}} style={{background:r.icon===em?sess.color+"22":"none",border:"none",borderRadius:4,cursor:"pointer",fontSize:16,padding:3}}>{em}</button>)}
-                  </div>}
+                  {emojiPickerIdx===i&&<>
+                    <div onClick={()=>setEmojiPickerIdx(null)} style={{position:"fixed",inset:0,zIndex:49,background:"rgba(0,0,0,0.45)"}}/>
+                    {/* FX20: picker panel pops in from its top-left anchor (transform+opacity only). Search "FX20" to remove: delete the transformOrigin/animation entries below. */}
+                    <div style={{position:"absolute",top:42,left:0,zIndex:50,background:C.card,border:`1px solid ${C.borderHi}`,borderRadius:12,padding:10,width:252,boxShadow:"0 10px 30px rgba(0,0,0,0.5)",
+                      transformOrigin:"top left",animation:"_fx20PickerIn .18s cubic-bezier(.22,1,.36,1) both"}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                        <span style={{fontSize:11,color:C.textMid,fontWeight:600}}>Choose an icon</span>
+                        <button onClick={()=>setEmojiPickerIdx(null)} style={{background:"none",border:"none",color:C.textLow,fontSize:14,cursor:"pointer",padding:2,lineHeight:1}}>✕</button>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:6,maxHeight:220,overflowY:"auto",paddingRight:2}}>
+                        {EMOJI_OPTS.map(em=><button key={em} onClick={()=>{patchRow(i,{icon:em});setEmojiPickerIdx(null);}}
+                          style={{width:36,height:36,background:r.icon===em?sess.color+"33":C.surfaceHi,border:`1.5px solid ${r.icon===em?sess.color:C.border}`,borderRadius:8,cursor:"pointer",fontSize:19,padding:0,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:r.icon===em?`0 0 8px ${sess.color}55`:"none"}}>{em}</button>)}
+                      </div>
+                    </div>
+                  </>}
                 </div>
                 <input value={r.name} onChange={e=>patchRow(i,{name:e.target.value})} placeholder="Exercise name"
                   style={{...inputStyle,flex:1,fontSize:13,padding:"8px 10px",border:`1px solid ${C.borderHi}`}}/>
@@ -1457,10 +1890,12 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
                 <textarea value={r.focus??""} onChange={e=>patchRow(i,{focus:e.target.value})} placeholder="Technique cues…" rows={2} style={{...inputStyle,resize:"vertical",lineHeight:1.5}}/>
               </div>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div style={{display:"flex",gap:6}}>
-                  {[["Weighted",true,sess.color],["Bodyweight",false,C.ok]].map(([l,w,c])=>(
-                    <button key={l} onClick={()=>patchRow(i,{weighted:w})} style={{padding:"5px 10px",background:r.weighted===w?c+"22":C.surfaceHi,border:`1px solid ${r.weighted===w?c:C.border}`,borderRadius:5,color:r.weighted===w?c:C.textMid,fontSize:10,cursor:"pointer",fontFamily:"Georgia,serif"}}>{l}</button>
-                  ))}
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {[["Weighted",{weighted:true,logMode:undefined},sess.color],["Bodyweight",{weighted:false,logMode:undefined},C.ok],["Bodyweight Count",{weighted:false,logMode:"reps"},"#3ba3ff"],["Weighted Count",{weighted:true,logMode:"reps_weight"},"#c77dff"]].map(([l,patch,c])=>{
+                    const active = r.weighted===patch.weighted && (r.logMode??undefined)===(patch.logMode??undefined);
+                    /* FX21: active mode button pops when selected (transform, one-shot). Search "FX21" to remove: delete the animation key from this style object. */
+                    return <button key={l} onClick={()=>patchRow(i,patch)} style={{padding:"5px 10px",background:active?c+"22":C.surfaceHi,border:`1px solid ${active?c:C.border}`,borderRadius:5,color:active?c:C.textMid,fontSize:10,cursor:"pointer",fontFamily:"Georgia,serif",...(active?{animation:"_fx21ModePop .22s cubic-bezier(.34,1.56,.64,1)"}:{})}}>{l}</button>;
+                  })}
                 </div>
                 <button onClick={()=>deleteRow(i)} style={{background:"none",border:`1px solid ${C.warn}40`,borderRadius:5,color:C.warn,fontSize:11,padding:"5px 10px",cursor:"pointer",fontFamily:"Georgia,serif"}}>✕ Delete</button>
               </div>
@@ -1473,7 +1908,9 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
         {tab==="warmup"&&<>
           <div style={{fontSize:10,color:C.textLow,marginBottom:SP.md,lineHeight:1.6}}>Edit warm-up steps. Each line is one step shown to you before the session starts.</div>
           {wuRows.map((r,i)=>(
-            <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+            /* FX19: rows fade+slide in, staggered by index (transform+opacity only, capped at 8 so long lists don't queue a slow cascade). Search "FX19" to remove: delete the animation entry below. */
+            <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center",
+              animation:`_fx19RowIn .22s ease ${Math.min(i,8)*.03}s both`}}>
               <div style={{display:"flex",flexDirection:"column",gap:3,flexShrink:0}}>
                 <button onClick={()=>moveListItem(setWuRows,i,-1)} disabled={i===0} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===0?C.textLow:C.text,fontSize:10,cursor:i===0?"default":"pointer",lineHeight:1,opacity:i===0?.4:1}}>▲</button>
                 <button onClick={()=>moveListItem(setWuRows,i,1)} disabled={i===wuRows.length-1} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===wuRows.length-1?C.textLow:C.text,fontSize:10,cursor:i===wuRows.length-1?"default":"pointer",lineHeight:1,opacity:i===wuRows.length-1?.4:1}}>▼</button>
@@ -1491,7 +1928,9 @@ function ExerciseEditorView({sessId,exList,warmupList,cooldownList,onSave,onSave
         {tab==="cooldown"&&<>
           <div style={{fontSize:10,color:C.textLow,marginBottom:SP.md,lineHeight:1.6}}>Edit cool-down steps shown after the session completes.</div>
           {cdRows.map((r,i)=>(
-            <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+            /* FX19: same stagger entrance as warm-up rows above. */
+            <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center",
+              animation:`_fx19RowIn .22s ease ${Math.min(i,8)*.03}s both`}}>
               <div style={{display:"flex",flexDirection:"column",gap:3,flexShrink:0}}>
                 <button onClick={()=>moveListItem(setCdRows,i,-1)} disabled={i===0} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===0?C.textLow:C.text,fontSize:10,cursor:i===0?"default":"pointer",lineHeight:1,opacity:i===0?.4:1}}>▲</button>
                 <button onClick={()=>moveListItem(setCdRows,i,1)} disabled={i===cdRows.length-1} style={{width:22,height:18,background:C.surfaceHi,border:`1px solid ${C.borderHi}`,borderRadius:4,color:i===cdRows.length-1?C.textLow:C.text,fontSize:10,cursor:i===cdRows.length-1?"default":"pointer",lineHeight:1,opacity:i===cdRows.length-1?.4:1}}>▼</button>
@@ -1608,7 +2047,21 @@ function SessionView({sessId,date,log,onLog,onBack,onComplete,exList,warmupList,
   const wu=warmupList??WARMUPS[sessId]??[];
   const cd=cooldownList??COOLDOWNS[sessId]??[];
   const isComplete=!!log[doneKey(date,sessId)];
+  const [justCompleted,setJustCompleted]=useState(false); // FX2 trigger
   const comp=getCompletionStats(log,sessId,date,exList);
+  const wuFlat=useMemo(()=>flattenChecklist(wu),[wu]);
+  const cdFlat=useMemo(()=>flattenChecklist(cd),[cd]);
+  const wuKey=k=>`wu__${date}__${sessId}__${k}`;
+  const cdKey=k=>`cd__${date}__${sessId}__${k}`;
+  const wuDone=wuFlat.filter(it=>log[wuKey(it.key)]).length;
+  const cdDone=cdFlat.filter(it=>log[cdKey(it.key)]).length;
+  const Check=({checked,onToggle,color})=>(
+    <button onClick={onToggle} style={{width:15,height:15,flexShrink:0,borderRadius:4,border:`1.5px solid ${checked?color:C.borderHi}`,background:checked?color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:0,marginRight:7,marginTop:2}}>
+      {/* FX14: checkmark pops in with a little bounce instead of appearing flat.
+          Search "FX14" to remove: delete the animation prop below. */}
+      {checked&&<span style={{fontSize:9,color:"#fff",lineHeight:1,display:"inline-block",animation:"_fx14TickPop .35s cubic-bezier(.34,1.56,.64,1) both"}}>✓</span>}
+    </button>
+  );
   return <div style={{paddingBottom:80}}>
     <div style={{background:`linear-gradient(180deg,${sess.color}14 0%,${sess.color}06 100%)`,borderBottom:`1px solid ${sess.color}35`,padding:"18px 16px 14px",position:"relative"}}>
       <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,transparent,${sess.color},transparent)`,opacity:.7}}/>
@@ -1622,14 +2075,13 @@ function SessionView({sessId,date,log,onLog,onBack,onComplete,exList,warmupList,
         </button>
       </div>}
       <div style={{fontSize:9,color:sess.color,letterSpacing:3,marginBottom:3,fontFamily:"monospace"}}>{fmtDate(date)}</div>
-      <div style={{fontSize:22}}>{sess.icon} {sess.label}</div>
+      <div style={{fontSize:22,display:"flex",alignItems:"center",gap:9}}><IconBox color={sess.color} size={20}/>{sess.label}</div>
       <div style={{fontSize:11,color:C.textMid,marginTop:2}}>{sess.sub}</div>
       <div style={{fontSize:10,color:C.textLow,marginTop:2}}>📍 {sess.loc}</div>
       {sess.note&&<div style={{marginTop:8,fontSize:11,color:C.textMid,lineHeight:1.6,background:sess.color+"0a",border:`1px solid ${sess.color}20`,borderRadius:6,padding:"8px 10px"}}>{sess.note}</div>}
       <div style={{marginTop:10}}>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:5}}>
           <span style={{color:C.textMid,fontFamily:"monospace",fontSize:10}}>{comp.done}/{comp.total} exercises</span>
-          <span style={{color:sess.color,fontWeight:700,fontFamily:"monospace",textShadow:`0 0 8px ${sess.color}`}}>{comp.pct}%</span>
         </div>
         <div style={{height:7,background:C.surfaceHi,borderRadius:4,overflow:"hidden",border:`1px solid ${sess.color}22`,position:"relative"}}>
           <div style={{height:"100%",width:`${comp.pct}%`,background:`linear-gradient(90deg,${sess.color}77,${sess.color})`,borderRadius:4,transition:"width 0.45s cubic-bezier(.22,1,.36,1)",boxShadow:`0 0 10px ${sess.color}99`}}/>
@@ -1652,22 +2104,56 @@ function SessionView({sessId,date,log,onLog,onBack,onComplete,exList,warmupList,
       </div>}
     </div>
     <div style={{padding:SP.md}}>
-      <Expand label="🟨 Warm-Up" accent={sess.color}>
+      <Expand label={`🔥 Warm-Up${wuFlat.length?` (${wuDone}/${wuFlat.length})`:""}`} accent={sess.color}>
         {wu.map((ph,i)=>typeof ph==="string"
-          ? <div key={i} style={{fontSize:11,color:C.textMid,padding:"2px 0 2px 10px",lineHeight:1.5}}>· {ph}</div>
-          : <div key={ph.name??i} style={{marginBottom:10}}><div style={{fontSize:9,color:sess.color,letterSpacing:2,marginBottom:5,fontFamily:"monospace"}}>{ph.name} — {ph.time}</div>{(ph.items??[]).map(it=><div key={it} style={{fontSize:11,color:C.textMid,padding:"1px 0 1px 10px",lineHeight:1.5}}>· {it}</div>)}</div>
+          ? <div key={i} style={{display:"flex",alignItems:"flex-start",padding:"2px 0",lineHeight:1.5}}>
+              <Check checked={!!log[wuKey(`${i}`)]} onToggle={()=>onLog(wuKey(`${i}`),log[wuKey(`${i}`)]?null:true)} color={sess.color}/>
+              <span style={{fontSize:11,color:log[wuKey(`${i}`)]?C.textLow:C.textMid,textDecoration:log[wuKey(`${i}`)]?"line-through":"none"}}>{ph}</span>
+            </div>
+          : <div key={ph.name??i} style={{marginBottom:10}}>
+              <div style={{fontSize:9,color:sess.color,letterSpacing:2,marginBottom:5,fontFamily:"monospace"}}>{ph.name} — {ph.time}</div>
+              {(ph.items??[]).map((it,j)=>(
+                <div key={it} style={{display:"flex",alignItems:"flex-start",padding:"1px 0",lineHeight:1.5}}>
+                  <Check checked={!!log[wuKey(`${i}-${j}`)]} onToggle={()=>onLog(wuKey(`${i}-${j}`),log[wuKey(`${i}-${j}`)]?null:true)} color={sess.color}/>
+                  <span style={{fontSize:11,color:log[wuKey(`${i}-${j}`)]?C.textLow:C.textMid,textDecoration:log[wuKey(`${i}-${j}`)]?"line-through":"none"}}>{it}</span>
+                </div>
+              ))}
+            </div>
         )}
       </Expand>
       <Divider/>
       <SectionHeader color={sess.color}>Exercises <span style={{color:C.textLow}}>({comp.done}/{comp.total})</span></SectionHeader>
-      {exList.map(ex=><ExRow key={ex.id} ex={ex} accent={sess.color} logKey={makeKey(date,sessId,ex.id)} logVal={log[makeKey(date,sessId,ex.id)]??null} onLog={onLog} lastWeight={ex.weighted?getLastWeight(log,sessId,ex.id,date):undefined}/>)}
+      {exList.map(ex=>{
+        const key=makeKey(date,sessId,ex.id);
+        let setRepsVal=null;
+        try{const raw=log[key+"__setreps"];if(raw)setRepsVal=JSON.parse(raw);}catch{}
+        const onLogSetReps=arr=>{
+          onLog(key+"__setreps",JSON.stringify(arr));
+          const sum=arr.reduce((s,x)=>s+(typeof x==="number"&&!isNaN(x)?x:0),0);
+          if(ex.logMode==="reps"){ onLog(key,sum); }
+          else if(ex.logMode==="reps_weight"){ onLog(key+"__reps",sum); }
+        };
+        return <ExRow key={ex.id} ex={ex} accent={sess.color} logKey={key} logVal={log[key]??null} onLog={onLog} setRepsVal={setRepsVal} onLogSetReps={onLogSetReps} lastWeight={(ex.weighted&&ex.logMode!=="reps")?getLastWeight(log,sessId,ex.id,date):undefined} plateau={ex.weighted?detectPlateau(log,sessId,ex.id):false}/>;
+      })}
       <Divider/>
-      <Expand label="🟥 Cool Down" accent={sess.color}>
-        {cd.map(c=><div key={c} style={{fontSize:11,color:C.textMid,padding:"2px 0 2px 10px"}}>· {c}</div>)}
+      <Expand label={`🧊 Cool Down${cdFlat.length?` (${cdDone}/${cdFlat.length})`:""}`} accent={sess.color}>
+        {cd.map((c,i)=>(
+          <div key={c} style={{display:"flex",alignItems:"flex-start",padding:"2px 0",lineHeight:1.5}}>
+            <Check checked={!!log[cdKey(`${i}`)]} onToggle={()=>onLog(cdKey(`${i}`),log[cdKey(`${i}`)]?null:true)} color={sess.color}/>
+            <span style={{fontSize:11,color:log[cdKey(`${i}`)]?C.textLow:C.textMid,textDecoration:log[cdKey(`${i}`)]?"line-through":"none"}}>{c}</span>
+          </div>
+        ))}
       </Expand>
-      <Button onClick={()=>{onLog(doneKey(date,sessId),true);onComplete();}} color={isComplete?undefined:sess.color} variant={isComplete?"secondary":"primary"} style={{marginTop:SP.md,width:"100%",padding:SP.md,fontSize:15,border:isComplete?`2px solid ${C.ok}`:undefined,color:isComplete?C.ok:undefined}}>
-        {isComplete?"✓ Completed":"Mark Session Complete"}
-      </Button>
+      <div style={{position:"relative"}}>
+        {/* FX2: session-complete celebration — ring ping + pop burst, one-shot on click. Remove this wrapping div's overlay (search "FX2") to disable. */}
+        {justCompleted&&<>
+          <div style={{position:"absolute",inset:0,marginTop:SP.md,borderRadius:10,border:`2px solid ${C.ok}`,pointerEvents:"none",animation:"_fx2Ring .6s ease-out both"}}/>
+          <div style={{position:"absolute",top:`calc(${SP.md}px + 50%)`,left:"50%",transform:"translate(-50%,-50%)",fontSize:34,pointerEvents:"none",animation:"_fx2Pop .7s ease-out both"}}>🎉</div>
+        </>}
+        <Button onClick={()=>{onLog(doneKey(date,sessId),true);setJustCompleted(true);setTimeout(()=>setJustCompleted(false),750);onComplete();}} color={isComplete?undefined:sess.color} variant={isComplete?"secondary":"primary"} style={{marginTop:SP.md,width:"100%",padding:SP.md,fontSize:15,border:isComplete?`2px solid ${C.ok}`:undefined,color:isComplete?C.ok:undefined}}>
+          {isComplete?"✓ Completed":"Mark Session Complete"}
+        </Button>
+      </div>
     </div>
   </div>;
 }
@@ -1675,33 +2161,54 @@ function SessionView({sessId,date,log,onLog,onBack,onComplete,exList,warmupList,
 function HistoryView({log,onOpen,onBack,exercises,onDeleteSession}){
   const [confirmDel,setConfirmDel]=useState(null); // {date,sessId}
   const [visible,setVisible]=useState(50); // render in pages so huge histories (1000+) don't all mount at once
-  // Parse done__ keys using lastIndexOf for robustness — memoized so it only recomputes when the log changes
-  const completed=useMemo(()=>Object.keys(log??{}).filter(k=>k.startsWith("done__")).map(k=>{
-    const rest=k.slice(6); const sep=rest.lastIndexOf("__"); if(sep<0)return null;
-    return{date:rest.slice(0,sep),sessId:rest.slice(sep+2)};
-  }).filter(r=>r&&isValidDate(r.date)&&r.sessId).sort((a,b)=>b.date.localeCompare(a.date)),[log]);
+  // Include any session with real activity that day — not just ones explicitly
+  // marked complete — so a second/third workout logged on the same day (that
+  // wasn't tapped "Mark Complete") still shows up here.
+  const completed=useMemo(()=>{
+    const seen=new Set(); const rows=[];
+    Object.keys(log??{}).forEach(k=>{
+      let date,sessId;
+      if(k.startsWith("done__")){
+        const rest=k.slice(6); const sep=rest.lastIndexOf("__"); if(sep<0)return;
+        date=rest.slice(0,sep); sessId=rest.slice(sep+2);
+      } else {
+        const parsed=parseExKey(k); if(!parsed)return;
+        const v=log[k]; if(v===null||v===undefined)return;
+        date=parsed.date; sessId=parsed.sessId;
+      }
+      if(!isValidDate(date)||!sessId||!SESSIONS.find(s=>s.id===sessId))return;
+      const key=`${date}__${sessId}`;
+      if(seen.has(key))return; seen.add(key);
+      rows.push({date,sessId,isComplete:!!log[`done__${date}__${sessId}`]});
+    });
+    return rows.sort((a,b)=>b.date.localeCompare(a.date));
+  },[log]);
   const shown=completed.slice(0,visible);
 
   return <div style={{paddingBottom:60}}>
     <div style={{padding:"18px 16px 14px",borderBottom:`1px solid ${C.border}`,position:"relative"}}>
       <button onClick={onBack} style={{background:"none",border:"none",color:C.textMid,fontSize:13,cursor:"pointer",padding:0,marginBottom:SP.sm,fontFamily:"Georgia,serif"}}>← Back</button>
       <div style={{fontSize:9,color:C.gold,letterSpacing:3,marginBottom:3,fontFamily:"monospace"}}>WORKOUT HISTORY</div>
-      <div style={{fontSize:22}}>All Sessions</div>
+      <div style={{fontSize:22,display:"flex",alignItems:"center",gap:10}}><IconGlyph color={C.pull} size={20} type="history"/> All Sessions</div>
       <div style={{fontSize:11,color:C.textLow,marginTop:3}}>{completed.length} session{completed.length!==1?"s":""}</div>
     </div>
     <div style={{padding:SP.md}}>
       {completed.length===0&&<div style={{textAlign:"center",padding:`${SP.xl}px ${SP.md}px`}}><div style={{fontSize:32,marginBottom:SP.md}}>💪</div><div style={{fontSize:14,color:C.textMid,marginBottom:SP.sm}}>No sessions logged yet</div><div style={{fontSize:12,color:C.textLow,lineHeight:1.8}}>Start your first session<br/>to begin tracking progress.</div></div>}
-      {shown.map(s=>{
+      {shown.map((s,si)=>{
         const m=SESSIONS.find(x=>x.id===s.sessId)??{icon:"?",label:s.sessId,color:C.textMid};
         const comp=getCompletionStats(log,s.sessId,s.date,exercises?.[s.sessId]);
         const key=`${s.date}__${s.sessId}`;
         const isConfirming=confirmDel&&confirmDel.date===s.date&&confirmDel.sessId===s.sessId;
-        return <div key={key} style={{background:C.card,border:`1px solid ${isConfirming?C.warn:C.border}`,borderRadius:9,padding:"12px 14px",marginBottom:SP.sm}}>
+        // FX10: rows fade+slide in staggered by index, capped at 10 so long histories don't queue up a slow cascade.
+        return <div key={key} style={{background:C.card,border:`1px solid ${isConfirming?C.warn:C.border}`,borderRadius:9,padding:"12px 14px",marginBottom:SP.sm,animation:`_fx10RowIn .22s ease ${Math.min(si,10)*.03}s both`}}>
           <div style={{display:"grid",gridTemplateColumns:"44px 1fr auto",gap:SP.sm,alignItems:"center",cursor:"pointer"}} onClick={()=>!isConfirming&&onOpen(s.sessId,s.date)}>
             <IconBox color={m.color} size={20}/>
             <div>
-              <div style={{fontSize:13,color:C.text}}>{m.label}</div>
-              <div style={{fontSize:10,color:C.textLow,marginTop:2}}>{fmtDate(s.date)} · {comp.done}/{comp.total} exercises · {comp.pct}%</div>
+              <div style={{fontSize:13,color:C.text,display:"flex",alignItems:"center",gap:6}}>
+                {m.label}
+                {!s.isComplete&&<span style={{fontSize:8,color:C.gold,background:C.gold+"1a",border:`1px solid ${C.gold}44`,borderRadius:4,padding:"1px 5px",fontFamily:"monospace",letterSpacing:.5}}>IN PROGRESS</span>}
+              </div>
+              <div style={{fontSize:10,color:C.textLow,marginTop:2}}>{fmtDate(s.date)} · {comp.done}/{comp.total} exercises</div>
             </div>
             {!isConfirming
               ? <button onClick={e=>{e.stopPropagation();setConfirmDel({date:s.date,sessId:s.sessId});}}
@@ -1709,7 +2216,8 @@ function HistoryView({log,onOpen,onBack,exercises,onDeleteSession}){
               : <div style={{fontSize:18,color:C.textLow}}>›</div>
             }
           </div>
-          {isConfirming&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.warn}25`,display:"flex",gap:8,alignItems:"center"}}>
+          {isConfirming&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.warn}25`,display:"flex",gap:8,alignItems:"center",
+            transformOrigin:"top",animation:"_fx15ConfirmIn .18s ease both"}}>
             <div style={{flex:1,fontSize:11,color:C.warn}}>Delete this session?</div>
             <button onClick={()=>{onDeleteSession(s.date,s.sessId);setConfirmDel(null);}}
               style={{background:C.warn,border:"none",borderRadius:6,color:"#fff",fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"Georgia,serif"}}>Delete</button>
@@ -1731,23 +2239,24 @@ function ProgressView({log,onBack,exercises}){
   const [selSess,setSelSess]=useState("push");
   const [selEx,setSelEx]=useState(null);
   const meta=SESSIONS.find(s=>s.id===selSess)??SESSIONS[0];
-  const exList=(exercises?.[selSess]??[]).filter(e=>e.weighted);
+  const exList=(exercises?.[selSess]??[]).filter(e=>e.weighted||e.logMode==="reps"||e.logMode==="reps_weight");
   useEffect(()=>{setSelEx(exList[0]?.id??null);},[selSess]);
   const hasData=eid=>Object.keys(log??{}).some(k=>{const parsed=parseExKey(k);return parsed&&parsed.sessId===selSess&&parsed.exId===eid&&typeof log[k]==="number"&&!isNaN(log[k]);});
+  const unitFor=ex=>ex?.logMode==="reps"?"reps":"kg";
   return <div style={{paddingBottom:60}}>
     <div style={{padding:"18px 16px 14px",borderBottom:`1px solid ${C.border}`}}>
       <button onClick={onBack} style={{background:"none",border:"none",color:C.textMid,fontSize:13,cursor:"pointer",padding:0,marginBottom:SP.sm,fontFamily:"Georgia,serif"}}>← Back</button>
       <div style={{fontSize:9,color:C.gold,letterSpacing:3,marginBottom:3,fontFamily:"monospace"}}>PROGRESSION</div>
-      <div style={{fontSize:22}}>Weight Tracker</div>
+      <div style={{fontSize:22}}>Progress Tracker</div>
       <div style={{fontSize:10,color:C.textLow,marginTop:3}}>Tap exercise · All / Week / Month</div>
     </div>
     <div style={{padding:SP.md}}>
       <div style={{display:"flex",gap:6,marginBottom:SP.md,flexWrap:"wrap"}}>{["push","pull","legs"].map(s=>{const m=SESSIONS.find(x=>x.id===s)??{icon:"?",label:s,color:C.textMid};return <button key={s} onClick={()=>setSelSess(s)} style={{padding:"7px 14px",background:selSess===s?m.color+"22":C.card,border:`1px solid ${selSess===s?m.color:C.border}`,borderRadius:6,color:selSess===s?m.color:C.textMid,fontSize:12,cursor:"pointer",fontFamily:"Georgia,serif",display:"flex",alignItems:"center",gap:6}}><IconBox color={m.color} size={20}/> {m.label.split(" ")[0]}</button>;})}</div>
       <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:SP.md}}>{exList.map(ex=><button key={ex.id} onClick={()=>setSelEx(ex.id)} style={{padding:"5px 10px",background:selEx===ex.id?meta.color+"22":C.card,border:`1px solid ${selEx===ex.id?meta.color:C.border}`,borderRadius:5,color:selEx===ex.id?meta.color:C.textMid,fontSize:10,cursor:"pointer",fontFamily:"Georgia,serif",position:"relative"}}>{ex.name.split(" ").slice(0,2).join(" ")}{hasData(ex.id)&&<span style={{position:"absolute",top:2,right:2,width:4,height:4,borderRadius:"50%",background:C.ok}}/>}</button>)}</div>
-      {selEx&&<Card style={{padding:SP.md,marginBottom:SP.md}}><Graph exId={selEx} sessId={selSess} exName={exList.find(e=>e.id===selEx)?.name??selEx} accent={meta.color} log={log}/></Card>}
+      {selEx&&<Card style={{padding:SP.md,marginBottom:SP.md}}><Graph exId={selEx} sessId={selSess} exName={exList.find(e=>e.id===selEx)?.name??selEx} accent={meta.color} log={log} unit={unitFor(exList.find(e=>e.id===selEx))}/></Card>}
       <Divider/>
-      <SectionHeader color={meta.color}>All {meta.label} — Weighted</SectionHeader>
-      {exList.map(ex=>{const vals=getAllWeights(log,selSess,ex.id);const latest=vals.length?vals[vals.length-1]:null;const pr=vals.length?Math.max(...vals):null;return <div key={ex.id} onClick={()=>setSelEx(ex.id)} style={{background:selEx===ex.id?meta.color+"0d":C.surfaceHi,border:`1px solid ${selEx===ex.id?meta.color+"40":C.border}`,borderRadius:8,padding:"10px 12px",marginBottom:6,display:"grid",gridTemplateColumns:"1fr 62px 62px",gap:SP.sm,alignItems:"center",cursor:"pointer"}}><div><div style={{fontSize:12,color:C.text}}>{ex.icon} {ex.name}</div><div style={{fontSize:9,color:C.textLow,marginTop:1}}>{vals.length} session{vals.length!==1?"s":""}</div></div><div style={{textAlign:"center"}}><div style={{fontSize:8,color:C.textLow}}>LATEST</div><div style={{fontSize:14,color:meta.color}}>{latest!=null?`${latest} kg`:"—"}</div></div><div style={{textAlign:"center"}}><div style={{fontSize:8,color:C.textLow}}>PR</div><div style={{fontSize:14,color:C.gold}}>{pr!=null?`${pr} kg`:"—"}</div></div></div>;})}
+      <SectionHeader color={meta.color}>All {meta.label} — Progress</SectionHeader>
+      {exList.map(ex=>{const u=unitFor(ex);const vals=getAllWeights(log,selSess,ex.id);const latest=vals.length?vals[vals.length-1]:null;const pr=vals.length?Math.max(...vals):null;return <div key={ex.id} onClick={()=>setSelEx(ex.id)} style={{background:selEx===ex.id?meta.color+"0d":C.surfaceHi,border:`1px solid ${selEx===ex.id?meta.color+"40":C.border}`,borderRadius:8,padding:"10px 12px",marginBottom:6,display:"grid",gridTemplateColumns:"1fr 62px 62px",gap:SP.sm,alignItems:"center",cursor:"pointer"}}><div><div style={{fontSize:12,color:C.text}}>{ex.icon} {ex.name}</div><div style={{fontSize:9,color:C.textLow,marginTop:1}}>{vals.length} session{vals.length!==1?"s":""}</div></div><div style={{textAlign:"center"}}><div style={{fontSize:8,color:C.textLow}}>LATEST</div><div style={{fontSize:14,color:meta.color}}>{latest!=null?`${latest} ${u}`:"—"}</div></div><div style={{textAlign:"center"}}><div style={{fontSize:8,color:C.textLow}}>PR</div><div style={{fontSize:14,color:C.gold}}>{pr!=null?`${pr} ${u}`:"—"}</div></div></div>;})}
     </div>
   </div>;
 }
@@ -1776,11 +2285,12 @@ function StartPicker({onStart,onStartMobility,onBack,themeMode}){
     <div style={{padding:"18px 16px"}}>
       <SectionHeader>Choose Session</SectionHeader>
       <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:SP.lg}}>
-        {SESSIONS.map(s=><button key={s.id} onClick={()=>setSessId(s.id)} style={{background:sessId===s.id?s.color+"18":C.card,border:`2px solid ${sessId===s.id?s.color:C.border}`,borderRadius:9,padding:"13px 16px",cursor:"pointer",textAlign:"left",fontFamily:"Georgia,serif",display:"flex",alignItems:"center",gap:12}}><IconBox color={s.color} size={20}/><div style={{flex:1}}><div style={{fontSize:14,color:sessId===s.id?s.color:C.text}}>{s.label}</div><div style={{fontSize:10,color:C.textLow,marginTop:1}}>{s.sub} · 📍 {s.loc}</div></div>{sessId===s.id&&<span style={{color:s.color,fontSize:16}}>✓</span>}</button>)}
+        {SESSIONS.map(s=><button key={s.id} onClick={()=>setSessId(s.id)} style={{background:sessId===s.id?s.color+"18":C.card,border:`2px solid ${sessId===s.id?s.color:C.border}`,borderRadius:9,padding:"13px 16px",cursor:"pointer",textAlign:"left",fontFamily:"Georgia,serif",display:"flex",alignItems:"center",gap:12}}><IconBox color={s.color} size={20}/><div style={{flex:1}}><div style={{fontSize:14,color:sessId===s.id?s.color:C.text}}>{s.label}</div><div style={{fontSize:10,color:C.textLow,marginTop:1}}>{s.sub} · 📍 {s.loc}</div></div>{sessId===s.id&&<span style={{color:s.color,fontSize:16,display:"inline-block",animation:"_fx17TilePop .28s cubic-bezier(.34,1.56,.64,1) both"}}>✓</span>}</button>)}
         <button onClick={()=>setSessId("mobility")} style={{background:isMobility?MOBILITY_TEXT+"18":C.card,border:`2px solid ${isMobility?MOBILITY_TEXT:C.border}`,borderRadius:9,padding:"13px 16px",cursor:"pointer",textAlign:"left",fontFamily:"Georgia,serif",display:"flex",alignItems:"center",gap:12}}>
           <IconBox color={MOBILITY_TEXT} size={20}/>
           <div style={{flex:1}}><div style={{fontSize:14,color:isMobility?MOBILITY_TEXT:C.text}}>Mobility</div><div style={{fontSize:10,color:C.textLow,marginTop:1}}>Rest day stretch & activation routines</div></div>
-          {isMobility&&<span style={{color:MOBILITY_TEXT,fontSize:16}}>✓</span>}
+          {/* FX17: selected-tile checkmark pop-in. Search "FX17" to remove: delete the animation from both checkmark spans in this block. */}
+          {isMobility&&<span style={{color:MOBILITY_TEXT,fontSize:16,display:"inline-block",animation:"_fx17TilePop .28s cubic-bezier(.34,1.56,.64,1) both"}}>✓</span>}
         </button>
       </div>
 
@@ -1825,8 +2335,26 @@ function StartPicker({onStart,onStartMobility,onBack,themeMode}){
 }
 
 function IconBox({color,size=28}){
-  return <div style={{width:size,height:size,borderRadius:8,background:`${color}14`,
-    border:`1.5px solid ${color}`,boxShadow:`0 0 8px ${color}55`,flexShrink:0}}/>;
+  // FX13: bounce-in with slight overshoot on mount. Search "FX13" to remove:
+  // delete the animation line below.
+  return <div style={{width:size,height:size,borderRadius:"50%",background:`${color}14`,
+    border:`1.5px solid ${color}`,boxShadow:`0 0 8px ${color}55`,flexShrink:0,
+    animation:"_fx13IconIn .4s cubic-bezier(.34,1.56,.64,1) both"}}/>;
+}
+
+// Same glow-circle badge as IconBox, but with a thin-stroke SVG glyph inside instead of being blank —
+// keeps nav icons in the app's own visual language rather than mismatched keyboard emoji.
+const ICON_GLYPHS = {
+  history: <path d="M12 7v5.2l3.6 2.1M12 20.5a8.5 8.5 0 1 0-8.5-8.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>,
+  trend:   <path d="M4 16.5l4.6-4.6 3.4 3.4L19.5 8M14.5 8h5v5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>,
+  archive: <><rect x="4" y="5.5" width="16" height="3.6" rx="1.1" fill="none"/><path d="M5.2 9.1v8.4c0 .8.6 1.4 1.4 1.4h10.8c.8 0 1.4-.6 1.4-1.4V9.1M10 13.2h4" fill="none" strokeLinecap="round"/></>,
+};
+function IconGlyph({color,size=28,type}){
+  return <div style={{width:size,height:size,borderRadius:"50%",background:`${color}14`,
+    border:`1.5px solid ${color}`,boxShadow:`0 0 8px ${color}55`,flexShrink:0,
+    display:"flex",alignItems:"center",justifyContent:"center"}}>
+    <svg width={size*.56} height={size*.56} viewBox="0 0 24 24" stroke={color} strokeWidth="1.7">{ICON_GLYPHS[type]}</svg>
+  </div>;
 }
 
 function MobilityView({log,onLog,customMobility,onSaveMobility,initialDate,initialPlanId,onBack,themeMode}){
@@ -1941,6 +2469,204 @@ function MobilityView({log,onLog,customMobility,onSaveMobility,initialDate,initi
   </div>;
 }
 
+function DataView({exportBackup,copyBackupAsText,importBackup,loadTestData,clearWorkoutData,confirmClear,setConfirmClear,clearScope,setClearScope,importMsg,fileInputRef,onBack,themeMode,actionFx,lastBackupAt,store,pendingImport,confirmPendingImport,cancelPendingImport,undoSnapshot,undoLastImport}){
+  // Same theme-adaptive monochrome accent as MobilityView: white on dark theme, black on light theme.
+  const W=themeMode==="light" ? "#000000" : "#ffffff";
+  const [showExportRange,setShowExportRange]=useState(false);
+
+  const stats=useMemo(()=>{
+    const log=store?.log||{};
+    const keys=Object.keys(log);
+    const sessionSet=new Set(keys.map(k=>{const p=parseLogKey(k);return `${p.date}__${p.sessId}`;}));
+    const bytes=(()=>{try{return new Blob([JSON.stringify(store)]).size;}catch(_){return JSON.stringify(store||{}).length;}})();
+    const kb=bytes<1024?`${bytes} B`:`${(bytes/1024).toFixed(1)} KB`;
+    const dates=keys.map(k=>parseLogKey(k).date).filter(Boolean).sort();
+    const bySess={};
+    for(const k of keys){
+      const p=parseLogKey(k);
+      const sid=p.sessId;
+      const sessKey=`${p.date}__${sid}`;
+      if(!bySess[sid]) bySess[sid]=new Set();
+      bySess[sid].add(sessKey);
+    }
+    const breakdown=SESSIONS.map(s=>({...s,count:bySess[s.id]?bySess[s.id].size:0}));
+    const customCount=Object.values(store?.customExercises||{}).reduce((a,arr)=>a+(Array.isArray(arr)?arr.length:0),0);
+    return { entries:keys.length, sessions:sessionSet.size, size:kb, earliest:dates[0]||null, latest:dates[dates.length-1]||null, breakdown, customCount };
+  },[store]);
+
+  const daysSinceBackup=useMemo(()=>{
+    if(!lastBackupAt) return null;
+    return Math.floor((Date.now()-new Date(lastBackupAt).getTime())/86400000);
+  },[lastBackupAt]);
+
+  // FX11: turns a button's border/color into a brief success (theme color) or error (shake+red) state.
+  function fxStyle(key){
+    const fx=actionFx?.[key];
+    if(fx==="success") return { animation:"_fx11Success .5s ease" };
+    if(fx==="error") return { animation:"_fx11Shake .4s ease", borderColor:C.warn, color:C.warn };
+    return {};
+  }
+
+  return <div style={{paddingBottom:60}}>
+    <div style={{padding:"18px 16px 14px",borderBottom:`1px solid ${C.border}`,position:"relative"}}>
+      <button onClick={onBack} style={{background:"none",border:"none",color:C.textMid,fontSize:13,cursor:"pointer",padding:0,marginBottom:SP.sm,fontFamily:"Georgia,serif"}}>← Back</button>
+      <div style={{fontSize:9,color:W,letterSpacing:3,marginBottom:3,fontFamily:"monospace",textShadow:`0 0 8px ${W}66`}}>DATA</div>
+      <div style={{fontSize:22,color:W,textShadow:`0 0 12px ${W}55`,display:"flex",alignItems:"center",gap:10}}>
+        <IconGlyph color={W} size={20} type="archive"/> Backup & Transfer
+      </div>
+      <div style={{fontSize:11,color:C.textLow,marginTop:3}}>Export, import, test data & reset</div>
+    </div>
+    <div style={{padding:SP.md}}>
+
+      {/* Undo-last-import banner — appears once, right after a merge, one-shot safety net */}
+      {undoSnapshot&&(
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,
+          background:`${W}0d`,border:`1px solid ${W}33`,borderRadius:8,padding:"9px 12px",marginBottom:SP.md,
+          animation:"_fx9CardIn .25s ease both"}}>
+          <div style={{fontSize:11,color:C.textMid,lineHeight:1.5}}>Import merged. Want to revert it?</div>
+          <button onClick={undoLastImport} style={{background:"none",border:`1px solid ${W}`,borderRadius:6,color:W,fontSize:11,padding:"6px 10px",cursor:"pointer",fontFamily:"Georgia,serif",whiteSpace:"nowrap"}}>Undo import</button>
+        </div>
+      )}
+
+      {/* Stats overview */}
+      <SectionHeader color={W}>Overview</SectionHeader>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:SP.sm,marginBottom:SP.sm}}>
+        <StatCard label="Sessions" value={stats.sessions} color={W}/>
+        <StatCard label="Entries" value={stats.entries} color={W}/>
+        <StatCard label="Storage" value={stats.size} color={W}/>
+      </div>
+
+      {/* Date range of log */}
+      {stats.earliest&&(
+        <div style={{fontSize:10,color:C.textLow,textAlign:"center",marginBottom:SP.sm,fontFamily:"monospace"}}>
+          {fmtDate(stats.earliest)} → {fmtDate(stats.latest)}
+        </div>
+      )}
+
+      {/* Per-session-type breakdown */}
+      <div style={{display:"flex",gap:6,marginBottom:SP.sm,flexWrap:"wrap"}}>
+        {stats.breakdown.map((s,si)=>(
+          <div key={s.id} style={{flex:"1 1 21%",background:`${s.color}10`,border:`1px solid ${s.color}33`,borderRadius:7,
+            padding:"7px 4px",textAlign:"center",animation:`_fx9CardIn .25s ease ${si*.06}s both`,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+            <IconBox color={s.color} size={14}/>
+            <div style={{fontSize:13,color:s.color,fontFamily:"monospace",fontWeight:700}}>{s.count}</div>
+            <div style={{fontSize:8,color:C.textLow}}>{s.label.replace(" Day","")}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Custom exercises count */}
+      {stats.customCount>0&&(
+        <div style={{fontSize:10,color:C.textLow,textAlign:"center",marginBottom:SP.md}}>
+          {stats.customCount} custom exercise{stats.customCount===1?"":"s"} added
+        </div>
+      )}
+
+      {/* Last backup reminder */}
+      <div style={{display:"flex",alignItems:"center",gap:8,background:daysSinceBackup==null||daysSinceBackup>14?C.warn+"14":`${W}0d`,
+        border:`1px solid ${daysSinceBackup==null||daysSinceBackup>14?C.warn+"44":W+"22"}`,borderRadius:8,padding:"9px 12px",marginBottom:SP.md}}>
+        <span style={{fontSize:14}}>{daysSinceBackup==null||daysSinceBackup>14?"⚠️":"🕓"}</span>
+        <div style={{fontSize:11,color:daysSinceBackup==null||daysSinceBackup>14?C.warn:C.textMid,lineHeight:1.5}}>
+          {lastBackupAt==null
+            ? "You haven't exported a backup yet — do it below."
+            : daysSinceBackup===0 ? "Backed up today."
+            : `Last backup: ${daysSinceBackup} day${daysSinceBackup===1?"":"s"} ago${daysSinceBackup>14?" — consider exporting again":""}.`}
+        </div>
+      </div>
+
+      <SectionHeader color={W}>Actions</SectionHeader>
+      <Card style={{padding:SP.md,marginBottom:SP.md,boxShadow:`0 0 16px ${W}1c`,border:`1px solid ${W}33`}}>
+        <div style={{fontSize:10,color:C.textLow,lineHeight:1.6,marginBottom:10}}>
+          Your data lives on this device only. Export a backup file here, then import it on another phone or browser to bring your history with you.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:SP.sm}}>
+          <Button onClick={()=>exportBackup()} color={W} style={{fontSize:12,padding:"10px 8px",...fxStyle("export")}}>⬇ Export</Button>
+          <Button onClick={()=>fileInputRef.current?.click()} color={W} style={{fontSize:12,padding:"10px 8px",...fxStyle("import")}}>⬆ Import</Button>
+          <input ref={fileInputRef} type="file" accept="application/json" onChange={importBackup} style={{display:"none"}}/>
+        </div>
+
+        {/* Export range + copy-as-text */}
+        <div style={{marginTop:8,display:"flex",gap:8,fontSize:10}}>
+          <button onClick={()=>setShowExportRange(v=>!v)} style={{background:"none",border:"none",color:C.textLow,cursor:"pointer",padding:0,textDecoration:"underline",fontFamily:"Georgia,serif"}}>Export a date range instead</button>
+          <span style={{color:C.textLow}}>·</span>
+          <button onClick={copyBackupAsText} style={{background:"none",border:"none",color:C.textLow,cursor:"pointer",padding:0,textDecoration:"underline",fontFamily:"Georgia,serif",...(actionFx?.copy?{color:actionFx.copy==="success"?W:C.warn}:{})}}>Copy as text</button>
+        </div>
+        {showExportRange&&(
+          <div style={{display:"flex",gap:6,marginTop:8,animation:"_fx9CardIn .2s ease both"}}>
+            {[["30d",30],["90d",90],["365d",365]].map(([lbl,d])=>(
+              <button key={lbl} onClick={()=>{exportBackup(d);setShowExportRange(false);}} style={{flex:1,background:"none",border:`1px solid ${W}44`,borderRadius:6,color:W,fontSize:11,padding:"6px 0",cursor:"pointer",fontFamily:"Georgia,serif"}}>Last {lbl}</button>
+            ))}
+          </div>
+        )}
+
+        {/* Dev test data loader */}
+        <div style={{marginTop:SP.sm,borderTop:`1px solid ${W}22`,paddingTop:SP.sm}}>
+          <Button onClick={loadTestData} variant="secondary" color={W} style={{width:"100%",fontSize:12,padding:"10px 8px",...fxStyle("test")}}>
+            🧪 Load 60-Day Test Run
+          </Button>
+          <div style={{fontSize:9,color:C.textLow,textAlign:"center",marginTop:5,lineHeight:1.5}}>
+            Push/Pull/Legs/Sprint · +2.5kg cycle · Deload wk3 · Jan–Feb 2026 · 30 sessions
+          </div>
+        </div>
+
+        {/* Scoped clear */}
+        <div style={{marginTop:SP.sm,borderTop:`1px solid ${W}22`,paddingTop:SP.sm}}>
+          {!confirmClear
+            ? <>
+                <div style={{display:"flex",gap:5,marginBottom:7,flexWrap:"wrap"}}>
+                  {[{id:"all",label:"All"},...SESSIONS.map(s=>({id:s.id,label:s.label.replace(" Day","")}))].map(o=>(
+                    <button key={o.id} onClick={()=>setClearScope(o.id)} style={{
+                      background:clearScope===o.id?C.warn+"22":"none",
+                      border:`1px solid ${clearScope===o.id?C.warn:C.border}`,borderRadius:5,
+                      color:clearScope===o.id?C.warn:C.textLow,fontSize:10,padding:"4px 8px",
+                      cursor:"pointer",fontFamily:"Georgia,serif"}}>{o.label}</button>
+                  ))}
+                </div>
+                <Button onClick={()=>setConfirmClear(true)} variant="secondary" color={C.warn} style={{width:"100%",fontSize:12,padding:"10px 8px",...fxStyle("clear")}}>
+                  🗑 Clear {clearScope==="all"?"All Workout Entries":`${SESSIONS.find(s=>s.id===clearScope)?.label} Entries`}
+                </Button>
+              </>
+            : <div style={{background:C.warn+"0e",border:`1px solid ${C.warn}30`,borderRadius:8,padding:"10px 12px",animation:"_fx11Shake .4s ease"}}>
+                <div style={{fontSize:11,color:C.warn,marginBottom:8}}>
+                  {clearScope==="all" ? "Delete all logged workout data? This cannot be undone." : `Delete all ${SESSIONS.find(s=>s.id===clearScope)?.label} entries? This cannot be undone.`}
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:SP.sm}}>
+                  <Button onClick={clearWorkoutData} color={C.warn} style={{fontSize:12,padding:"8px 0"}}>Yes, Clear</Button>
+                  <button onClick={()=>setConfirmClear(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.textMid,fontSize:12,padding:"8px 0",cursor:"pointer",fontFamily:"Georgia,serif"}}>Cancel</button>
+                </div>
+              </div>
+          }
+        </div>
+        {importMsg&&<div style={{marginTop:8,fontSize:11,color:importMsg.includes("cleared")?C.warn:W,lineHeight:1.5,animation:"_fx9CardIn .25s ease both"}}>{importMsg}</div>}
+      </Card>
+
+      {/* Transparency note */}
+      <div style={{fontSize:9,color:C.textLow,textAlign:"center",lineHeight:1.6,opacity:.7}}>
+        Stored locally on this device only — key <span style={{fontFamily:"monospace"}}>jayanth_workout_v7</span>. No cloud sync.
+      </div>
+    </div>
+
+    {/* Import preview modal — shown before merging, so nothing is applied blind */}
+    {pendingImport&&(
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:50,padding:20,animation:"_fx9CardIn .2s ease both"}}>
+        <div style={{background:C.card,border:`1px solid ${W}44`,borderRadius:12,padding:SP.md,maxWidth:340,width:"100%",boxShadow:`0 0 24px ${W}22`}}>
+          <div style={{fontSize:14,color:W,marginBottom:8,fontWeight:700}}>Import preview</div>
+          <div style={{fontSize:11,color:C.textMid,lineHeight:1.7,marginBottom:12}}>
+            <div>File: <span style={{color:C.text}}>{pendingImport.fileName}</span></div>
+            <div>{pendingImport.count} entries</div>
+            {pendingImport.earliest&&<div>Dated {fmtDate(pendingImport.earliest)} → {fmtDate(pendingImport.latest)}</div>}
+            <div style={{marginTop:6,color:C.textLow,fontSize:10}}>This will merge into your current data — nothing existing gets wiped, matching keys get updated.</div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:SP.sm}}>
+            <Button onClick={confirmPendingImport} color={W} style={{fontSize:12,padding:"9px 0"}}>Merge it in</Button>
+            <button onClick={cancelPendingImport} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.textMid,fontSize:12,padding:"9px 0",cursor:"pointer",fontFamily:"Georgia,serif"}}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    )}
+  </div>;
+}
+
 export default function App(){
   const [store,setStore]=useState(()=>lsLoad());
   const [saving,setSaving]=useState(false);
@@ -1950,12 +2676,23 @@ export default function App(){
   const [mobilityActive,setMobilityActive]=useState(null);
   const [prevView,setPrevView]=useState("home");
   const [importMsg,setImportMsg]=useState("");
+  // FX11: per-action success/error flag for Data screen buttons ('success'|'error'|null), auto-clears.
+  const [actionFx,setActionFx]=useState({});
+  function flashAction(key,kind){ setActionFx(a=>({...a,[key]:kind})); setTimeout(()=>setActionFx(a=>({...a,[key]:null})),900); }
+  const [lastBackupAt,setLastBackupAt]=useState(()=>{ try{return localStorage.getItem("jayanth_last_backup_at")||null;}catch(_){return null;} });
   const [confirmClear,setConfirmClear]=useState(false);
+  const [clearScope,setClearScope]=useState("all"); // "all" | a SESSIONS id — which entries Clear targets
+  const [pendingImport,setPendingImport]=useState(null); // {incomingLog,incomingCE,fileName} — awaiting confirm after preview
+  const [undoSnapshot,setUndoSnapshot]=useState(null); // {log,customExercises,label} — one-shot revert after an import
   const [showSplash,setShowSplash]=useState(true);
   const [themeMode,setThemeMode]=useState(()=>{
     try{ return localStorage.getItem(THEME_STORAGE_KEY)==="light" ? "light" : "dark"; }catch(_){ return "dark"; }
   });
   const fileInputRef=useRef(null);
+  const logRef=useRef(store.log);
+  useEffect(()=>{logRef.current=store.log;},[store.log]);
+  const [lastAction,setLastAction]=useState(null); // {key,prev,ts} for Undo toast
+  const undoTimerRef=useRef(null);
 
   function toggleTheme(){
     setThemeMode(m=>{
@@ -1973,8 +2710,21 @@ export default function App(){
   },[store],800);
 
   const onLog=useCallback((key,val)=>{
+    const prev = logRef.current?.[key] ?? null;
     setStore(s=>{const lg=(s&&typeof s.log==="object"&&!Array.isArray(s.log))?s.log:{};const next={...s,log:{...lg}};if(val===null||val===undefined)delete next.log[key];else next.log[key]=val;return next;});
+    setLastAction({key,prev});
+    if(undoTimerRef.current)clearTimeout(undoTimerRef.current);
+    undoTimerRef.current=setTimeout(()=>setLastAction(null),5000);
   },[]);
+
+  function undoLast(){
+    if(!lastAction)return;
+    const {key,prev}=lastAction;
+    setStore(s=>{const lg=(s&&typeof s.log==="object"&&!Array.isArray(s.log))?s.log:{};const next={...s,log:{...lg}};if(prev===null||prev===undefined)delete next.log[key];else next.log[key]=prev;return next;});
+    setLastAction(null);
+    if(undoTimerRef.current)clearTimeout(undoTimerRef.current);
+  }
+
 
   function openSession(sid,date,from="home"){setActive({sessId:sid,date});setPrevView(from);setView("session");}
   function openMobility(planId,date,from="home"){setMobilityActive({planId,date});setPrevView(from);setView("mobility");}
@@ -2022,9 +2772,19 @@ export default function App(){
   const resolvedExercises = useMemo(()=>resolveAllExercises(store.customExercises), [store.customExercises]);
 
   function clearWorkoutData(){
-    setStore(s=>({...s,log:{}}));
+    setStore(s=>{
+      if(clearScope==="all") return {...s,log:{}};
+      // Scoped clear: drop only log keys belonging to that session type (key format date__sessId__exId[...]).
+      const nextLog={};
+      for(const k of Object.keys(s.log)){
+        if(parseLogKey(k).sessId!==clearScope) nextLog[k]=s.log[k];
+      }
+      return {...s,log:nextLog};
+    });
     setConfirmClear(false);
-    setImportMsg("All workout entries cleared.");
+    const label=clearScope==="all" ? "All workout entries cleared." : `Cleared all ${SESSIONS.find(x=>x.id===clearScope)?.label||clearScope} entries.`;
+    setImportMsg(label);
+    flashAction("clear","success");
     setTimeout(()=>setImportMsg(""),3000);
   }
 
@@ -2034,22 +2794,49 @@ export default function App(){
       log:{...s.log,...TEST_STORE.log},
       customExercises:{...s.customExercises,...TEST_STORE.customExercises},
     }));
-    setImportMsg(`✓ Loaded 30-day test run — 16 sessions, push/pull/legs/sprint cycle with deload week 3.`);
+    setImportMsg(`✓ Loaded 60-day test run — 30 sessions, Jan 1 – Feb 28 2026, push/pull/legs/sprint cycle with deload week 3.`);
+    flashAction("test","success");
     setTimeout(()=>setImportMsg(""),5000);
   }
 
-  function exportBackup(){
+  function exportBackup(rangeDays){
     try{
-      const blob=new Blob([JSON.stringify(store)],{type:"application/json"});
+      let payload=store;
+      if(rangeDays){
+        const cutoff=Date.now()-rangeDays*86400000;
+        const log={};
+        for(const k of Object.keys(store.log)){
+          const d=parseLogKey(k).date;
+          if(new Date(d).getTime()>=cutoff) log[k]=store.log[k];
+        }
+        payload={...store,log};
+      }
+      const blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
       const url=URL.createObjectURL(blob);
       const a=document.createElement("a");
       a.href=url;
-      a.download=`jayanth-workout-backup-${todayStr()}.json`;
+      a.download=`jayanth-workout-backup-${todayStr()}${rangeDays?`-last${rangeDays}d`:""}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    }catch(_){}
+      const now=new Date().toISOString();
+      try{localStorage.setItem("jayanth_last_backup_at",now);}catch(_){}
+      setLastBackupAt(now);
+      flashAction("export","success");
+    }catch(_){ flashAction("export","error"); }
+  }
+
+  async function copyBackupAsText(){
+    try{
+      await navigator.clipboard.writeText(JSON.stringify(store));
+      setImportMsg("Backup copied to clipboard as text.");
+      flashAction("copy","success");
+    }catch(_){
+      setImportMsg("Couldn't copy — clipboard unavailable.");
+      flashAction("copy","error");
+    }
+    setTimeout(()=>setImportMsg(""),3000);
   }
 
   function importBackup(e){
@@ -2061,19 +2848,42 @@ export default function App(){
         const parsed=JSON.parse(ev.target.result);
         const incomingLog=(parsed&&typeof parsed.log==="object"&&!Array.isArray(parsed.log))?parsed.log:null;
         const incomingCE=(parsed&&typeof parsed.customExercises==="object"&&!Array.isArray(parsed.customExercises))?parsed.customExercises:null;
-        if(!incomingLog){ setImportMsg("Couldn't read that file — not a valid backup."); return; }
-        setStore(s=>{
-          const currentLog=(s&&typeof s.log==="object"&&!Array.isArray(s.log))?s.log:{};
-          const currentCE=(s&&typeof s.customExercises==="object"&&!Array.isArray(s.customExercises))?s.customExercises:{};
-          // Merge — never wipes existing entries, incoming fills gaps / updates matching keys
-          return { ...s, log:{ ...currentLog, ...incomingLog }, customExercises:{ ...currentCE, ...(incomingCE??{}) } };
+        if(!incomingLog){ setImportMsg("Couldn't read that file — not a valid backup."); flashAction("import","error"); return; }
+        const dates=Object.keys(incomingLog).map(k=>parseLogKey(k).date).filter(Boolean).sort();
+        setPendingImport({
+          incomingLog, incomingCE:incomingCE??{}, fileName:file.name,
+          count:Object.keys(incomingLog).length,
+          earliest:dates[0]||null, latest:dates[dates.length-1]||null,
         });
-        setImportMsg(`Imported ${Object.keys(incomingLog).length} entries — merged with existing data.`);
-      }catch(_){ setImportMsg("Couldn't read that file — not valid JSON."); }
-      setTimeout(()=>setImportMsg(""),4000);
+      }catch(_){ setImportMsg("Couldn't read that file — not valid JSON."); flashAction("import","error"); setTimeout(()=>setImportMsg(""),4000); }
     };
     reader.readAsText(file);
     e.target.value="";
+  }
+
+  function confirmPendingImport(){
+    if(!pendingImport) return;
+    setStore(s=>{
+      const currentLog=(s&&typeof s.log==="object"&&!Array.isArray(s.log))?s.log:{};
+      const currentCE=(s&&typeof s.customExercises==="object"&&!Array.isArray(s.customExercises))?s.customExercises:{};
+      // Snapshot for one-shot undo, taken right before the merge.
+      setUndoSnapshot({log:currentLog,customExercises:currentCE,label:`before importing ${pendingImport.fileName}`});
+      return { ...s, log:{ ...currentLog, ...pendingImport.incomingLog }, customExercises:{ ...currentCE, ...pendingImport.incomingCE } };
+    });
+    setImportMsg(`Imported ${pendingImport.count} entries — merged with existing data.`);
+    flashAction("import","success");
+    setPendingImport(null);
+    setTimeout(()=>setImportMsg(""),4000);
+  }
+
+  function cancelPendingImport(){ setPendingImport(null); }
+
+  function undoLastImport(){
+    if(!undoSnapshot) return;
+    setStore(s=>({...s,log:undoSnapshot.log,customExercises:undoSnapshot.customExercises}));
+    setImportMsg("Import undone — restored to state " + undoSnapshot.label + ".");
+    setUndoSnapshot(null);
+    setTimeout(()=>setImportMsg(""),4000);
   }
 
   const totalDone=useMemo(()=>Object.keys(store.log??{}).filter(k=>k.startsWith("done__")).length,[store.log]);
@@ -2102,9 +2912,16 @@ export default function App(){
   const wrap=ch=>(
     <div style={{...THEME_VARS[themeMode],position:"relative",minHeight:"100vh",maxHeight:"100vh",maxWidth:520,margin:"0 auto",background:C.bg,overflow:"hidden"}}>
       {(saving||saved)&&<div style={{position:"absolute",top:8,right:12,fontSize:9,color:saving?"var(--gold-88)":C.ok+"99",fontFamily:"monospace",zIndex:999}}>{saving?"saving…":"✓ saved"}</div>}
-      <div style={{height:"100%",maxHeight:"100vh",overflowY:"auto",color:C.text,fontFamily:"Georgia,serif",paddingBottom:60,WebkitOverflowScrolling:"touch"}}>
+      <div key={view} style={{height:"100%",maxHeight:"100vh",overflowY:"auto",color:C.text,fontFamily:"Georgia,serif",paddingBottom:60,WebkitOverflowScrolling:"touch",animation:"_fx8ViewIn .22s ease both"}}>
         {ch}
       </div>
+      {lastAction&&<div style={{position:"absolute",bottom:16,left:"50%",transform:"translateX(-50%)",zIndex:1000,
+        background:C.card,border:`1px solid ${C.borderHi}`,borderRadius:9,padding:"9px 8px 9px 14px",
+        display:"flex",alignItems:"center",gap:12,fontSize:12,color:C.text,
+        boxShadow:"0 8px 24px rgba(0,0,0,.45)",animation:"_inSlideUp .2s ease both"}}>
+        <span style={{color:C.textMid}}>Logged</span>
+        <button onClick={undoLast} style={{background:C.gold+"22",border:`1px solid ${C.gold}66`,color:C.gold,fontWeight:700,cursor:"pointer",fontSize:11,padding:"5px 12px",borderRadius:6,fontFamily:"Georgia,serif"}}>↺ UNDO</button>
+      </div>}
     </div>
   );
 
@@ -2115,6 +2932,7 @@ export default function App(){
   if(view==="mobility")return wrap(<MobilityView log={store.log} onLog={onLog} customMobility={store.customMobility} onSaveMobility={saveMobilityList} initialDate={mobilityActive?.date} initialPlanId={mobilityActive?.planId} onBack={()=>{setMobilityActive(null);setView("home");}} themeMode={themeMode}/>);
   if(view==="history")return wrap(<HistoryView log={store.log} onOpen={(s,d)=>openSession(s,d,"history")} onBack={()=>setView("home")} exercises={resolvedExercises} onDeleteSession={deleteSession}/>);
   if(view==="progress")return wrap(<ProgressView log={store.log} onBack={()=>setView("home")} exercises={resolvedExercises}/>);
+  if(view==="data")return wrap(<DataView exportBackup={exportBackup} copyBackupAsText={copyBackupAsText} importBackup={importBackup} loadTestData={loadTestData} clearWorkoutData={clearWorkoutData} confirmClear={confirmClear} setConfirmClear={setConfirmClear} clearScope={clearScope} setClearScope={setClearScope} importMsg={importMsg} fileInputRef={fileInputRef} onBack={()=>setView("home")} themeMode={themeMode} actionFx={actionFx} lastBackupAt={lastBackupAt} store={store} pendingImport={pendingImport} confirmPendingImport={confirmPendingImport} cancelPendingImport={cancelPendingImport} undoSnapshot={undoSnapshot} undoLastImport={undoLastImport}/>);
 
   return wrap(<>
     <div style={{background: themeMode==="light"
@@ -2130,7 +2948,7 @@ export default function App(){
       <div style={{display:"flex",alignItems:"center",gap:12}}>
         <AppLogo size={46}/>
         <div>
-          <div style={{fontSize:26,letterSpacing:-1,lineHeight:1.15}}>Jayanth's</div>
+          <div style={{fontSize:26,letterSpacing:-1,lineHeight:1.15}}>Jayanth</div>
           <div style={{fontSize:26,letterSpacing:-1,lineHeight:1.15,color:C.gold}}>Workout Tracker</div>
         </div>
       </div>
@@ -2204,21 +3022,28 @@ export default function App(){
       </div>
 
       <SectionHeader color={C.gold} style={{textShadow:`0 0 8px ${C.gold}`}}>Recovery</SectionHeader>
-      <Card style={{padding:SP.md,marginBottom:SP.md,boxShadow:`0 0 12px ${C.gold}11`}}>
-        {recoveryData.map(r=><RecoveryBar key={r.sid} label={r.sess.label} icon={r.sess.icon} color={r.sess.color} days={r.days}/>)}
+      <Card style={{padding:SP.md,marginBottom:SP.md,
+        boxShadow:`0 0 16px ${C.gold}18, inset 0 1px 1px rgba(255,255,255,.04), inset 0 0 30px ${C.gold}08`,
+        border:`1px solid ${C.gold}26`}}>
+        {recoveryData.map((r,ri)=><RecoveryBar key={r.sid} label={r.sess.label} color={r.sess.color} days={r.days} index={ri}/>)}
         {recommended&&<div style={{marginTop:6,paddingTop:10,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:8}}>
           <span style={{fontSize:11,color:C.textLow}}>Recommended:</span>
-          <span style={{fontSize:13,color:recommended.sess.color,fontWeight:700,textShadow:`0 0 8px ${recommended.sess.color}`}}>{recommended.sess.icon} {recommended.sess.label}</span>
+          <span style={{fontSize:13,color:recommended.sess.color,fontWeight:700,textShadow:`0 0 8px ${recommended.sess.color}`,display:"inline-flex",alignItems:"center",gap:6}}><IconBox color={recommended.sess.color} size={14}/> {recommended.sess.label}</span>
         </div>}
       </Card>
 
       <SectionHeader color={C.pull} style={{textShadow:`0 0 8px ${C.pull}`}}>Consistency</SectionHeader>
-      <Card style={{padding:SP.md,marginBottom:SP.md,boxShadow:`0 0 12px ${C.pull}18`}}>
+      <Card style={{padding:SP.md,marginBottom:SP.md,
+        boxShadow:`0 0 16px ${C.pull}22, inset 0 1px 1px rgba(255,255,255,.04), inset 0 0 30px ${C.pull}08`,
+        border:`1px solid ${C.pull}2a`}}>
         <Heatmap log={store.log} themeMode={themeMode}/>
       </Card>
 
       {prs.slice(0,3).length>0&&<><SectionHeader color={C.gold}>Recent PRs</SectionHeader><Card style={{padding:`${SP.sm}px ${SP.md}px`,marginBottom:SP.md}}>{prs.slice(0,3).map((p,i)=>(
-  <div key={p.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:i<2?`1px solid ${C.border}33`:"none"}}>
+  // FX9: one-shot diagonal shimmer sweep across each PR row on mount.
+  <div key={p.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:i<2?`1px solid ${C.border}33`:"none",
+    background:"linear-gradient(105deg,transparent 40%,rgba(255,215,0,.10) 50%,transparent 60%)",backgroundSize:"250% 100%",
+    animation:`_fx9Shimmer 1s ease ${i*.1}s 1`}}>
     <div style={{fontSize:12,color:C.text,display:"flex",alignItems:"center",gap:6}}>
       <span style={{fontSize:8,color:p.color,fontFamily:"monospace",background:p.color+"14",border:`1px solid ${p.color}33`,borderRadius:3,padding:"1px 4px"}}>#{i+1}</span>
       {p.icon} {p.name}
@@ -2226,65 +3051,39 @@ export default function App(){
     <div style={{fontSize:14,color:p.color,fontWeight:700,textShadow:`0 0 8px ${p.color}66`,fontFamily:"monospace"}}>{p.kg} kg</div>
   </div>
 ))}</Card></>}
-      {recent.length>0&&<><SectionHeader color={C.textMid}>Recent</SectionHeader>{recent.map(r=>{const m=SESSIONS.find(s=>s.id===r.sessId)??{icon:"?",label:r.sessId,color:C.textMid};return <div key={`${r.date}__${r.sessId}`} onClick={()=>openSession(r.sessId,r.date,"home")} style={{background:`linear-gradient(135deg,${m.color}08,${C.card})`,border:`1px solid ${m.color}33`,borderRadius:11,padding:"11px 13px",marginBottom:7,cursor:"pointer",display:"grid",gridTemplateColumns:"44px 1fr auto",gap:SP.sm,alignItems:"center",boxShadow:`0 0 8px ${m.color}14`,position:"relative",overflow:"hidden"}}>
+      {recent.length>0&&<><SectionHeader color={C.textMid}>Recent</SectionHeader>{recent.map((r,ri)=>{const m=SESSIONS.find(s=>s.id===r.sessId)??{icon:"?",label:r.sessId,color:C.textMid};return <div key={`${r.date}__${r.sessId}`} onClick={()=>openSession(r.sessId,r.date,"home")} style={{background:`linear-gradient(135deg,${m.color}08,${C.card})`,border:`1px solid ${m.color}33`,borderRadius:11,padding:"11px 13px",marginBottom:7,cursor:"pointer",display:"grid",gridTemplateColumns:"44px 1fr auto",gap:SP.sm,alignItems:"center",boxShadow:`0 0 8px ${m.color}14`,position:"relative",overflow:"hidden",
+    // FX9: recent cards fade+slide up, staggered by index, on Home load.
+    animation:`_fx9CardIn .25s ease ${ri*.06}s both`}}>
     <div style={{position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,transparent,${m.color}44,transparent)`,opacity:.7}}/>
     <IconBox color={m.color} size={20}/>
     <div><div style={{fontSize:13,color:C.text}}>{m.label}</div><div style={{fontSize:10,color:C.textLow,marginTop:1,fontFamily:"monospace"}}>{fmtDate(r.date)}</div></div>
     <div style={{fontSize:18,color:m.color,opacity:.6}}>›</div>
   </div>;})}</>}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:SP.sm,marginTop:6,marginBottom:SP.md}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:SP.sm,marginTop:6,marginBottom:SP.md}}>
         {[
-          {label:"📋 All Sessions",view:"history",color:C.pull},
-          {label:"📊 Progression", view:"progress",color:C.legs},
+          {label:"All Sessions",icon:"history",view:"history",color:C.pull},
+          {label:"Progression", icon:"trend",  view:"progress",color:C.legs},
+          {label:"Data",        icon:"archive",view:"data", color:themeMode==="light"?"#000000":"#ffffff"},
         ].map((nb,i)=>(
           <button key={nb.view} onClick={()=>setView(nb.view)}
             style={{background:`linear-gradient(135deg,${nb.color}12,${C.card})`,
-              border:`1px solid ${nb.color}55`,borderRadius:10,color:nb.color,fontSize:13,
+              border:`1px solid ${nb.color}55`,borderRadius:10,color:nb.color,fontSize:12,
               padding:SP.md,cursor:"pointer",fontFamily:"Georgia,serif",textAlign:"center",
               boxShadow:`0 0 14px ${nb.color}28`,position:"relative",overflow:"hidden",
-              transition:"box-shadow .2s"}}>
+              transition:"box-shadow .2s",display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
             {/* shimmer */}
             <div style={{position:"absolute",inset:0,
               background:"linear-gradient(105deg,transparent 30%,rgba(255,255,255,.07) 50%,transparent 70%)",
               backgroundSize:"300% 100%",animation:"_inShimmer 3s linear 1",pointerEvents:"none"}}/>
+            {/* Overdue-backup badge: shows on the Data button when no backup yet or 14+ days since last export */}
+            {nb.view==="data"&&(lastBackupAt==null||(Date.now()-new Date(lastBackupAt).getTime())/86400000>14)&&
+              <span style={{position:"absolute",top:6,right:8,width:7,height:7,borderRadius:"50%",background:C.warn,
+                boxShadow:`0 0 6px ${C.warn}`,animation:"_fx3Flash .4s ease both"}}/>}
+            <IconGlyph color={nb.color} size={26} type={nb.icon}/>
             <span style={{position:"relative"}}>{nb.label}</span>
           </button>
         ))}
       </div>
-
-      <SectionHeader color={C.textMid}>Backup & Transfer</SectionHeader>
-      <Card style={{padding:SP.md,marginBottom:SP.md}}>
-        <div style={{fontSize:10,color:C.textLow,lineHeight:1.6,marginBottom:10}}>
-          Your data lives on this device only. Export a backup file here, then import it on another phone or browser to bring your history with you.
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:SP.sm}}>
-          <button onClick={exportBackup} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12,padding:"10px 8px",cursor:"pointer",fontFamily:"Georgia,serif",textAlign:"center"}}>⬇ Export Backup</button>
-          <button onClick={()=>fileInputRef.current?.click()} style={{background:C.surfaceHi,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:12,padding:"10px 8px",cursor:"pointer",fontFamily:"Georgia,serif",textAlign:"center"}}>⬆ Import Backup</button>
-          <input ref={fileInputRef} type="file" accept="application/json" onChange={importBackup} style={{display:"none"}}/>
-        </div>
-        {/* Dev test data loader */}
-        <div style={{marginTop:SP.sm,borderTop:`1px solid ${C.border}`,paddingTop:SP.sm}}>
-          <button onClick={loadTestData} style={{width:"100%",background:"none",border:`1px solid ${C.sprint}40`,borderRadius:8,color:C.sprint,fontSize:12,padding:"10px 8px",cursor:"pointer",fontFamily:"Georgia,serif",textAlign:"center"}}>
-            🧪 Load 30-Day Test Run
-          </button>
-          <div style={{fontSize:9,color:C.textLow,textAlign:"center",marginTop:5,lineHeight:1.5}}>
-            Push/Pull/Legs/Sprint · +2.5kg/wk · Deload W3 · 16 sessions
-          </div>
-        </div>
-        <div style={{marginTop:SP.sm,borderTop:`1px solid ${C.border}`,paddingTop:SP.sm}}>
-          {!confirmClear
-            ? <button onClick={()=>setConfirmClear(true)} style={{width:"100%",background:"none",border:`1px solid ${C.warn}40`,borderRadius:8,color:C.warn,fontSize:12,padding:"10px 8px",cursor:"pointer",fontFamily:"Georgia,serif",textAlign:"center"}}>🗑 Clear All Workout Entries</button>
-            : <div style={{background:C.warn+"0e",border:`1px solid ${C.warn}30`,borderRadius:8,padding:"10px 12px"}}>
-                <div style={{fontSize:11,color:C.warn,marginBottom:8}}>Delete all logged workout data? This cannot be undone.</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:SP.sm}}>
-                  <button onClick={clearWorkoutData} style={{background:C.warn,border:"none",borderRadius:6,color:"#fff",fontSize:12,padding:"8px 0",cursor:"pointer",fontFamily:"Georgia,serif"}}>Yes, Clear All</button>
-                  <button onClick={()=>setConfirmClear(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.textMid,fontSize:12,padding:"8px 0",cursor:"pointer",fontFamily:"Georgia,serif"}}>Cancel</button>
-                </div>
-              </div>
-          }
-        </div>
-        {importMsg&&<div style={{marginTop:8,fontSize:11,color:importMsg.includes("cleared")?C.warn:C.ok,lineHeight:1.5}}>{importMsg}</div>}
-      </Card>
     </div>
   </>);
 }

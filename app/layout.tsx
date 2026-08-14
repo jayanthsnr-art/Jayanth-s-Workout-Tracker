@@ -17,7 +17,7 @@ export const metadata: Metadata = {
       { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
       { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
     ],
-    apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }],
+    apple: [{ url: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/icon-black-bg-G8hsYcISWRr2LOSx5ZPKbFqfYAdFhD.png", type: "image/png" }],
   },
 }
 
