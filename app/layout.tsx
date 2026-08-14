@@ -13,8 +13,11 @@ export const metadata: Metadata = {
     title: "Jayanth's Workout Tracker",
   },
   icons: {
-    icon: [{ url: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/icon-black-bg-nLOXDLOy2CJHF6kJb6ak4zkyOS6qc5.png", type: "image/png" }],
-    apple: [{ url: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/icon-black-bg-nLOXDLOy2CJHF6kJb6ak4zkyOS6qc5.png", type: "image/png" }],
+    icon: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }],
   },
 }
 
