@@ -103,7 +103,7 @@ export default function InstallPrompt() {
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/icon-cropped-RWUTEsvlOue6Sfm3jQ6lAu6snwrbj4.png"
+        src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/image-Cgnq0G5Q6aznsiGaXKborm4U5nTGFB.png"
         alt="App icon"
         width={44}
         height={44}
